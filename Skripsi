@@ -1,0 +1,3007 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/Calvinwen10/3-luas-dan-volume-bangun-ruang/blob/main/Skripsi\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "uKTyU3FzfL5o",
+        "outputId": "bf51e146-6056-4f1f-a0ce-43ea127653ae"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Collecting google-play-scraper\n",
+            "  Downloading google_play_scraper-1.2.6-py3-none-any.whl (28 kB)\n",
+            "Installing collected packages: google-play-scraper\n",
+            "Successfully installed google-play-scraper-1.2.6\n"
+          ]
+        }
+      ],
+      "source": [
+        "#Referensi: https://www.linkedin.com/pulse/how-scrape-google-play-reviews-4-simple-steps-using-python-kundi/\n",
+        "\n",
+        "!pip install google-play-scraper"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from google_play_scraper import app\n",
+        "\n",
+        "import pandas as pd\n",
+        "\n",
+        "import numpy as np"
+      ],
+      "metadata": {
+        "id": "27-KTiEhfXpt"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from google_play_scraper import Sort\n",
+        "from google_play_scraper.constants.element import ElementSpecs\n",
+        "from google_play_scraper.constants.regex import Regex\n",
+        "from google_play_scraper.constants.request import Formats\n",
+        "from google_play_scraper.utils.request import post\n",
+        "\n",
+        "import pandas as pd\n",
+        "from datetime import datetime\n",
+        "from tqdm import tqdm\n",
+        "import time"
+      ],
+      "metadata": {
+        "id": "QiWJ1hQpfoWo"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "app_id = ''\n",
+        "\n",
+        "MAX_COUNT_EACH_FETCH = 199\n",
+        "\n",
+        "\n",
+        "class _ContinuationToken:\n",
+        "    __slots__ = (\n",
+        "        \"token\",\n",
+        "        \"lang\",\n",
+        "        \"country\",\n",
+        "        \"sort\",\n",
+        "        \"count\",\n",
+        "        \"filter_score_with\",\n",
+        "        \"filter_device_with\",\n",
+        "    )\n",
+        "\n",
+        "    def __init__(\n",
+        "        self, token, lang, country, sort, count, filter_score_with, filter_device_with\n",
+        "    ):\n",
+        "        self.token = token\n",
+        "        self.lang = lang\n",
+        "        self.country = country\n",
+        "        self.sort = sort\n",
+        "        self.count = count\n",
+        "        self.filter_score_with = filter_score_with\n",
+        "        self.filter_device_with = filter_device_with\n",
+        "\n",
+        "\n",
+        "def _fetch_review_items(\n",
+        "    url: str,\n",
+        "    app_id: str,\n",
+        "    sort: int,\n",
+        "    count: int,\n",
+        "    filter_score_with: Optional[int],\n",
+        "    filter_device_with: Optional[int],\n",
+        "    pagination_token: Optional[str],\n",
+        "):\n",
+        "    dom = post(\n",
+        "        url,\n",
+        "        Formats.Reviews.build_body(\n",
+        "            app_id,\n",
+        "            sort,\n",
+        "            count,\n",
+        "            \"null\" if filter_score_with is None else filter_score_with,\n",
+        "            \"null\" if filter_device_with is None else filter_device_with,\n",
+        "            pagination_token,\n",
+        "        ),\n",
+        "        {\"content-type\": \"application/x-www-form-urlencoded\"},\n",
+        "    )\n",
+        "    match = json.loads(Regex.REVIEWS.findall(dom)[0])\n",
+        "\n",
+        "    return json.loads(match[0][2])[0], json.loads(match[0][2])[-2][-1]\n",
+        "\n",
+        "\n",
+        "def reviews(\n",
+        "    app_id: str,\n",
+        "    lang: str = \"id\",\n",
+        "    country: str = \"id\",\n",
+        "    sort: Sort = Sort.MOST_RELEVANT,\n",
+        "    count: int = 100,\n",
+        "    filter_score_with: int = None,\n",
+        "    filter_device_with: int = None,\n",
+        "    continuation_token: _ContinuationToken = None,\n",
+        ") -> Tuple[List[dict], _ContinuationToken]:\n",
+        "    sort = sort.value\n",
+        "\n",
+        "    if continuation_token is not None:\n",
+        "        token = continuation_token.token\n",
+        "\n",
+        "        if token is None:\n",
+        "            return (\n",
+        "                [],\n",
+        "                continuation_token,\n",
+        "            )\n",
+        "\n",
+        "        lang = continuation_token.lang\n",
+        "        country = continuation_token.country\n",
+        "        sort = continuation_token.sort\n",
+        "        count = continuation_token.count\n",
+        "        filter_score_with = continuation_token.filter_score_with\n",
+        "        filter_device_with = continuation_token.filter_device_with\n",
+        "    else:\n",
+        "        token = None\n",
+        "\n",
+        "    url = Formats.Reviews.build(lang=lang, country=country)\n",
+        "\n",
+        "    _fetch_count = count\n",
+        "\n",
+        "    result = []\n",
+        "\n",
+        "    while True:\n",
+        "        if _fetch_count == 0:\n",
+        "            break\n",
+        "\n",
+        "        if _fetch_count > MAX_COUNT_EACH_FETCH:\n",
+        "            _fetch_count = MAX_COUNT_EACH_FETCH\n",
+        "\n",
+        "        try:\n",
+        "            review_items, token = _fetch_review_items(\n",
+        "                url,\n",
+        "                app_id,\n",
+        "                sort,\n",
+        "                _fetch_count,\n",
+        "                filter_score_with,\n",
+        "                filter_device_with,\n",
+        "                token,\n",
+        "            )\n",
+        "        except (TypeError, IndexError):\n",
+        "            #funnan MOD start\n",
+        "            token = continuation_token.token\n",
+        "            continue\n",
+        "            #MOD end\n",
+        "\n",
+        "        for review in review_items:\n",
+        "            result.append(\n",
+        "                {\n",
+        "                    k: spec.extract_content(review)\n",
+        "                    for k, spec in ElementSpecs.Review.items()\n",
+        "                }\n",
+        "            )\n",
+        "\n",
+        "        _fetch_count = count - len(result)\n",
+        "\n",
+        "        if isinstance(token, list):\n",
+        "            token = None\n",
+        "            break\n",
+        "\n",
+        "    return (\n",
+        "        result,\n",
+        "        _ContinuationToken(\n",
+        "            token, lang, country, sort, count, filter_score_with, filter_device_with\n",
+        "        ),\n",
+        "    )\n",
+        "\n",
+        "\n",
+        "def reviews_all(app_id: str, sleep_milliseconds: int = 0, **kwargs) -> list:\n",
+        "    kwargs.pop(\"count\", None)\n",
+        "    kwargs.pop(\"continuation_token\", None)\n",
+        "\n",
+        "    continuation_token = None\n",
+        "\n",
+        "    result = []\n",
+        "\n",
+        "    while True:\n",
+        "        _result, continuation_token = reviews(\n",
+        "            app_id,\n",
+        "            count=MAX_COUNT_EACH_FETCH,\n",
+        "            continuation_token=continuation_token,\n",
+        "            **kwargs\n",
+        "        )\n",
+        "\n",
+        "        result += _result\n",
+        "\n",
+        "        if continuation_token.token is None:\n",
+        "            break\n",
+        "\n",
+        "        if sleep_milliseconds:\n",
+        "            sleep(sleep_milliseconds / 1000)\n",
+        "\n",
+        "    return result"
+      ],
+      "metadata": {
+        "id": "_f89THLksx8a"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "result = []\n",
+        "continuation_token = None\n",
+        "reviews_count = 5000\n",
+        "\n",
+        "with tqdm(total=reviews_count, position=0, leave=True) as pbar:\n",
+        "    while len(result) < reviews_count:\n",
+        "        new_result, continuation_token = reviews(\n",
+        "            'coin.ajaib.co.id',\n",
+        "            continuation_token=continuation_token,\n",
+        "            lang='id',\n",
+        "            country='id',\n",
+        "            sort=Sort.NEWEST,\n",
+        "            filter_score_with=None,\n",
+        "            count=199\n",
+        "        )\n",
+        "        if not new_result:\n",
+        "            break\n",
+        "        result.extend(new_result)\n",
+        "        pbar.update(len(new_result))"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "zz_xfvcFwLmD",
+        "outputId": "8d2dd4f0-6822-4e0c-aae6-a1100a6a74a3"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "5174it [00:05, 902.74it/s]\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df_busu = pd.DataFrame(np.array(result),columns=['review'])\n",
+        "\n",
+        "df_busu = df_busu.join(pd.DataFrame(df_busu.pop('review').tolist()))\n",
+        "\n",
+        "df_busu.head()"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 625
+        },
+        "id": "0L5Ons-xfrol",
+        "outputId": "732f060f-c474-48d9-f781-bff8cb28f65c"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "                               reviewId         userName  \\\n",
+              "0  c7d38f72-ecdd-4b5f-9f84-483172920b4a    Regar Margana   \n",
+              "1  6552cb20-ba98-411a-b599-44ae2c8175f4  Maehan Hotplate   \n",
+              "2  0caa5424-3ab0-4109-a76d-31de827661b9            iqbal   \n",
+              "3  d5e6ad00-5e1f-4963-9fba-e8ef3254d957         Akmal Ok   \n",
+              "4  ac29576e-364a-42c2-8700-3a96936c9494    Hasyrat Aqdas   \n",
+              "\n",
+              "                                           userImage  \\\n",
+              "0  https://play-lh.googleusercontent.com/a/ACg8oc...   \n",
+              "1  https://play-lh.googleusercontent.com/a/ACg8oc...   \n",
+              "2  https://play-lh.googleusercontent.com/a-/ALV-U...   \n",
+              "3  https://play-lh.googleusercontent.com/a/ACg8oc...   \n",
+              "4  https://play-lh.googleusercontent.com/a/ACg8oc...   \n",
+              "\n",
+              "                                             content  score  thumbsUpCount  \\\n",
+              "0  Tidak tau cara masuk ganti nama N password N r...      5              0   \n",
+              "1                                                 Ok      5              0   \n",
+              "2  ah gk jelas pas mau halving btc malah masa pem...      3              0   \n",
+              "3  Aplikasi Ga jelas, transaksi jual Reksadana me...      1              0   \n",
+              "4  Woy buat la buat tarik nya pakai dana ribet ka...      1              0   \n",
+              "\n",
+              "  reviewCreatedVersion                  at replyContent repliedAt appVersion  \n",
+              "0               2.46.0 2024-04-16 13:48:42         None       NaT     2.46.0  \n",
+              "1               2.45.1 2024-04-16 13:27:49         None       NaT     2.45.1  \n",
+              "2               2.46.0 2024-04-16 11:34:35         None       NaT     2.46.0  \n",
+              "3                 None 2024-04-16 08:54:02         None       NaT       None  \n",
+              "4                 None 2024-04-16 03:00:06         None       NaT       None  "
+            ],
+            "text/html": [
+              "\n",
+              "  <div id=\"df-cd83bc4d-84d1-4d2f-bcbb-e5bfd5a127b8\" class=\"colab-df-container\">\n",
+              "    <div>\n",
+              "<style scoped>\n",
+              "    .dataframe tbody tr th:only-of-type {\n",
+              "        vertical-align: middle;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe tbody tr th {\n",
+              "        vertical-align: top;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe thead th {\n",
+              "        text-align: right;\n",
+              "    }\n",
+              "</style>\n",
+              "<table border=\"1\" class=\"dataframe\">\n",
+              "  <thead>\n",
+              "    <tr style=\"text-align: right;\">\n",
+              "      <th></th>\n",
+              "      <th>reviewId</th>\n",
+              "      <th>userName</th>\n",
+              "      <th>userImage</th>\n",
+              "      <th>content</th>\n",
+              "      <th>score</th>\n",
+              "      <th>thumbsUpCount</th>\n",
+              "      <th>reviewCreatedVersion</th>\n",
+              "      <th>at</th>\n",
+              "      <th>replyContent</th>\n",
+              "      <th>repliedAt</th>\n",
+              "      <th>appVersion</th>\n",
+              "    </tr>\n",
+              "  </thead>\n",
+              "  <tbody>\n",
+              "    <tr>\n",
+              "      <th>0</th>\n",
+              "      <td>c7d38f72-ecdd-4b5f-9f84-483172920b4a</td>\n",
+              "      <td>Regar Margana</td>\n",
+              "      <td>https://play-lh.googleusercontent.com/a/ACg8oc...</td>\n",
+              "      <td>Tidak tau cara masuk ganti nama N password N r...</td>\n",
+              "      <td>5</td>\n",
+              "      <td>0</td>\n",
+              "      <td>2.46.0</td>\n",
+              "      <td>2024-04-16 13:48:42</td>\n",
+              "      <td>None</td>\n",
+              "      <td>NaT</td>\n",
+              "      <td>2.46.0</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>1</th>\n",
+              "      <td>6552cb20-ba98-411a-b599-44ae2c8175f4</td>\n",
+              "      <td>Maehan Hotplate</td>\n",
+              "      <td>https://play-lh.googleusercontent.com/a/ACg8oc...</td>\n",
+              "      <td>Ok</td>\n",
+              "      <td>5</td>\n",
+              "      <td>0</td>\n",
+              "      <td>2.45.1</td>\n",
+              "      <td>2024-04-16 13:27:49</td>\n",
+              "      <td>None</td>\n",
+              "      <td>NaT</td>\n",
+              "      <td>2.45.1</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>2</th>\n",
+              "      <td>0caa5424-3ab0-4109-a76d-31de827661b9</td>\n",
+              "      <td>iqbal</td>\n",
+              "      <td>https://play-lh.googleusercontent.com/a-/ALV-U...</td>\n",
+              "      <td>ah gk jelas pas mau halving btc malah masa pem...</td>\n",
+              "      <td>3</td>\n",
+              "      <td>0</td>\n",
+              "      <td>2.46.0</td>\n",
+              "      <td>2024-04-16 11:34:35</td>\n",
+              "      <td>None</td>\n",
+              "      <td>NaT</td>\n",
+              "      <td>2.46.0</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>3</th>\n",
+              "      <td>d5e6ad00-5e1f-4963-9fba-e8ef3254d957</td>\n",
+              "      <td>Akmal Ok</td>\n",
+              "      <td>https://play-lh.googleusercontent.com/a/ACg8oc...</td>\n",
+              "      <td>Aplikasi Ga jelas, transaksi jual Reksadana me...</td>\n",
+              "      <td>1</td>\n",
+              "      <td>0</td>\n",
+              "      <td>None</td>\n",
+              "      <td>2024-04-16 08:54:02</td>\n",
+              "      <td>None</td>\n",
+              "      <td>NaT</td>\n",
+              "      <td>None</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>4</th>\n",
+              "      <td>ac29576e-364a-42c2-8700-3a96936c9494</td>\n",
+              "      <td>Hasyrat Aqdas</td>\n",
+              "      <td>https://play-lh.googleusercontent.com/a/ACg8oc...</td>\n",
+              "      <td>Woy buat la buat tarik nya pakai dana ribet ka...</td>\n",
+              "      <td>1</td>\n",
+              "      <td>0</td>\n",
+              "      <td>None</td>\n",
+              "      <td>2024-04-16 03:00:06</td>\n",
+              "      <td>None</td>\n",
+              "      <td>NaT</td>\n",
+              "      <td>None</td>\n",
+              "    </tr>\n",
+              "  </tbody>\n",
+              "</table>\n",
+              "</div>\n",
+              "    <div class=\"colab-df-buttons\">\n",
+              "\n",
+              "  <div class=\"colab-df-container\">\n",
+              "    <button class=\"colab-df-convert\" onclick=\"convertToInteractive('df-cd83bc4d-84d1-4d2f-bcbb-e5bfd5a127b8')\"\n",
+              "            title=\"Convert this dataframe to an interactive table.\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "  <svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\" viewBox=\"0 -960 960 960\">\n",
+              "    <path d=\"M120-120v-720h720v720H120Zm60-500h600v-160H180v160Zm220 220h160v-160H400v160Zm0 220h160v-160H400v160ZM180-400h160v-160H180v160Zm440 0h160v-160H620v160ZM180-180h160v-160H180v160Zm440 0h160v-160H620v160Z\"/>\n",
+              "  </svg>\n",
+              "    </button>\n",
+              "\n",
+              "  <style>\n",
+              "    .colab-df-container {\n",
+              "      display:flex;\n",
+              "      gap: 12px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert {\n",
+              "      background-color: #E8F0FE;\n",
+              "      border: none;\n",
+              "      border-radius: 50%;\n",
+              "      cursor: pointer;\n",
+              "      display: none;\n",
+              "      fill: #1967D2;\n",
+              "      height: 32px;\n",
+              "      padding: 0 0 0 0;\n",
+              "      width: 32px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert:hover {\n",
+              "      background-color: #E2EBFA;\n",
+              "      box-shadow: 0px 1px 2px rgba(60, 64, 67, 0.3), 0px 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "      fill: #174EA6;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-buttons div {\n",
+              "      margin-bottom: 4px;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert {\n",
+              "      background-color: #3B4455;\n",
+              "      fill: #D2E3FC;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert:hover {\n",
+              "      background-color: #434B5C;\n",
+              "      box-shadow: 0px 1px 3px 1px rgba(0, 0, 0, 0.15);\n",
+              "      filter: drop-shadow(0px 1px 2px rgba(0, 0, 0, 0.3));\n",
+              "      fill: #FFFFFF;\n",
+              "    }\n",
+              "  </style>\n",
+              "\n",
+              "    <script>\n",
+              "      const buttonEl =\n",
+              "        document.querySelector('#df-cd83bc4d-84d1-4d2f-bcbb-e5bfd5a127b8 button.colab-df-convert');\n",
+              "      buttonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "\n",
+              "      async function convertToInteractive(key) {\n",
+              "        const element = document.querySelector('#df-cd83bc4d-84d1-4d2f-bcbb-e5bfd5a127b8');\n",
+              "        const dataTable =\n",
+              "          await google.colab.kernel.invokeFunction('convertToInteractive',\n",
+              "                                                    [key], {});\n",
+              "        if (!dataTable) return;\n",
+              "\n",
+              "        const docLinkHtml = 'Like what you see? Visit the ' +\n",
+              "          '<a target=\"_blank\" href=https://colab.research.google.com/notebooks/data_table.ipynb>data table notebook</a>'\n",
+              "          + ' to learn more about interactive tables.';\n",
+              "        element.innerHTML = '';\n",
+              "        dataTable['output_type'] = 'display_data';\n",
+              "        await google.colab.output.renderOutput(dataTable, element);\n",
+              "        const docLink = document.createElement('div');\n",
+              "        docLink.innerHTML = docLinkHtml;\n",
+              "        element.appendChild(docLink);\n",
+              "      }\n",
+              "    </script>\n",
+              "  </div>\n",
+              "\n",
+              "\n",
+              "<div id=\"df-6298ccbf-b677-4e6d-a523-c02057212e71\">\n",
+              "  <button class=\"colab-df-quickchart\" onclick=\"quickchart('df-6298ccbf-b677-4e6d-a523-c02057212e71')\"\n",
+              "            title=\"Suggest charts\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\"viewBox=\"0 0 24 24\"\n",
+              "     width=\"24px\">\n",
+              "    <g>\n",
+              "        <path d=\"M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z\"/>\n",
+              "    </g>\n",
+              "</svg>\n",
+              "  </button>\n",
+              "\n",
+              "<style>\n",
+              "  .colab-df-quickchart {\n",
+              "      --bg-color: #E8F0FE;\n",
+              "      --fill-color: #1967D2;\n",
+              "      --hover-bg-color: #E2EBFA;\n",
+              "      --hover-fill-color: #174EA6;\n",
+              "      --disabled-fill-color: #AAA;\n",
+              "      --disabled-bg-color: #DDD;\n",
+              "  }\n",
+              "\n",
+              "  [theme=dark] .colab-df-quickchart {\n",
+              "      --bg-color: #3B4455;\n",
+              "      --fill-color: #D2E3FC;\n",
+              "      --hover-bg-color: #434B5C;\n",
+              "      --hover-fill-color: #FFFFFF;\n",
+              "      --disabled-bg-color: #3B4455;\n",
+              "      --disabled-fill-color: #666;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart {\n",
+              "    background-color: var(--bg-color);\n",
+              "    border: none;\n",
+              "    border-radius: 50%;\n",
+              "    cursor: pointer;\n",
+              "    display: none;\n",
+              "    fill: var(--fill-color);\n",
+              "    height: 32px;\n",
+              "    padding: 0;\n",
+              "    width: 32px;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart:hover {\n",
+              "    background-color: var(--hover-bg-color);\n",
+              "    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "    fill: var(--button-hover-fill-color);\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart-complete:disabled,\n",
+              "  .colab-df-quickchart-complete:disabled:hover {\n",
+              "    background-color: var(--disabled-bg-color);\n",
+              "    fill: var(--disabled-fill-color);\n",
+              "    box-shadow: none;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-spinner {\n",
+              "    border: 2px solid var(--fill-color);\n",
+              "    border-color: transparent;\n",
+              "    border-bottom-color: var(--fill-color);\n",
+              "    animation:\n",
+              "      spin 1s steps(1) infinite;\n",
+              "  }\n",
+              "\n",
+              "  @keyframes spin {\n",
+              "    0% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "      border-left-color: var(--fill-color);\n",
+              "    }\n",
+              "    20% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    30% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    40% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    60% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    80% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "    90% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "  }\n",
+              "</style>\n",
+              "\n",
+              "  <script>\n",
+              "    async function quickchart(key) {\n",
+              "      const quickchartButtonEl =\n",
+              "        document.querySelector('#' + key + ' button');\n",
+              "      quickchartButtonEl.disabled = true;  // To prevent multiple clicks.\n",
+              "      quickchartButtonEl.classList.add('colab-df-spinner');\n",
+              "      try {\n",
+              "        const charts = await google.colab.kernel.invokeFunction(\n",
+              "            'suggestCharts', [key], {});\n",
+              "      } catch (error) {\n",
+              "        console.error('Error during call to suggestCharts:', error);\n",
+              "      }\n",
+              "      quickchartButtonEl.classList.remove('colab-df-spinner');\n",
+              "      quickchartButtonEl.classList.add('colab-df-quickchart-complete');\n",
+              "    }\n",
+              "    (() => {\n",
+              "      let quickchartButtonEl =\n",
+              "        document.querySelector('#df-6298ccbf-b677-4e6d-a523-c02057212e71 button');\n",
+              "      quickchartButtonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "    })();\n",
+              "  </script>\n",
+              "</div>\n",
+              "    </div>\n",
+              "  </div>\n"
+            ],
+            "application/vnd.google.colaboratory.intrinsic+json": {
+              "type": "dataframe",
+              "variable_name": "df_busu",
+              "summary": "{\n  \"name\": \"df_busu\",\n  \"rows\": 5174,\n  \"fields\": [\n    {\n      \"column\": \"reviewId\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5174,\n        \"samples\": [\n          \"c22434d3-3d83-470c-a9d7-728224db5299\",\n          \"84eabf7d-5fd4-451c-a11c-e018d28c22b4\",\n          \"d31fc19a-333e-4fd0-92a7-e3e0a2ac4ace\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"userName\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5156,\n        \"samples\": [\n          \"millky latte\",\n          \"lukimah lukimah\",\n          \"Ahmadsahrul Munawar\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"userImage\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5171,\n        \"samples\": [\n          \"https://play-lh.googleusercontent.com/a-/ALV-UjUoaKoi3x5FXJypsSNEfmWjZZYpQ8NOwIkQU25kAHqHgOmqx5U7\",\n          \"https://play-lh.googleusercontent.com/a/ACg8ocJ11omIm76ldvgAKmkJNXYZt6EUyhp0VMFPYMj_f_tpwrrBWA=mo\",\n          \"https://play-lh.googleusercontent.com/a-/ALV-UjXwb8RBYoBpEFqkVPl3itqEiggvM1ssrJdU-V9-5MkLbKiXVQA\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"content\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 4772,\n        \"samples\": [\n          \"Aplikasi jelek, udah set jual. Gak bisa ke jual, udah turunin angka jual. Udah melompat tinggi masih gak ke jual, aplikasi scam\",\n          \"easy to use simple\",\n          \"Wawww aplikasi yang bagus cocok untuk mempermudah investasi\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"score\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": 1,\n        \"min\": 1,\n        \"max\": 5,\n        \"num_unique_values\": 5,\n        \"samples\": [\n          3,\n          2,\n          1\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"thumbsUpCount\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": 6,\n        \"min\": 0,\n        \"max\": 244,\n        \"num_unique_values\": 44,\n        \"samples\": [\n          18,\n          46,\n          101\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"reviewCreatedVersion\",\n      \"properties\": {\n        \"dtype\": \"category\",\n        \"num_unique_values\": 68,\n        \"samples\": [\n          \"2.17.0\",\n          \"2.36.5\",\n          \"2.40.0\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"at\",\n      \"properties\": {\n        \"dtype\": \"date\",\n        \"min\": \"2022-08-17 00:12:03\",\n        \"max\": \"2024-04-16 13:48:42\",\n        \"num_unique_values\": 5161,\n        \"samples\": [\n          \"2023-11-22 05:32:26\",\n          \"2023-12-02 09:39:43\",\n          \"2023-01-11 04:06:56\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"replyContent\",\n      \"properties\": {\n        \"dtype\": \"category\",\n        \"num_unique_values\": 162,\n        \"samples\": [\n          \"Hi Kak Heri Kurniawan, terima kasih atas saran dan kritikan yang diberikan. Kami akan sampaikan ke tim terkait sehingga kedepannya kami dapat menjadi lebih baik lagi. Apabila ada kendala yang lain, mohon untuk tidak ragu menghubungi kami kembali. ~RG\",\n          \"Hi Kak ZILDJIAN, mohon maaf atas ketidaknyamanannya ya. Terkait kendala Kakak diperlukan pengecekan lebih lanjut silahkan hubungi kami melalui email support.saham@ajaib.co.id atau live chat pada aplikasi ya. ~RG\",\n          \"Hi Kak, mohon maaf atas ketidaknyamanannya ya. Kami informasikan bahwa saat ini Ajaib Kripto hadir demi meningkatkan kenyamanan dan akses ke berbagai fitur lengkap dan lebih banyak lagi yang akan datang. Jika ingin dibantu atau ditanyakan lebih lanjut silakan menghubungi kami melalui email atau Live Chat ya Kak. Terima kasih. ~LT\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"repliedAt\",\n      \"properties\": {\n        \"dtype\": \"date\",\n        \"min\": \"2022-08-24 04:30:34\",\n        \"max\": \"2024-01-24 15:49:56\",\n        \"num_unique_values\": 403,\n        \"samples\": [\n          \"2023-06-23 03:00:48\",\n          \"2022-11-24 02:16:24\",\n          \"2022-11-23 09:42:18\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"appVersion\",\n      \"properties\": {\n        \"dtype\": \"category\",\n        \"num_unique_values\": 68,\n        \"samples\": [\n          \"2.17.0\",\n          \"2.36.5\",\n          \"2.40.0\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    }\n  ]\n}"
+            }
+          },
+          "metadata": {},
+          "execution_count": 109
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "len(df_busu.index) #count the number of data we got"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "ReykR9tefu0P",
+        "outputId": "110e376c-0882-4c85-ae06-fd489c8266a1"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "5174"
+            ]
+          },
+          "metadata": {},
+          "execution_count": 110
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df_busu[['userName', 'score','at', 'content']].head()  #preview userName, rating, date-time, and reviews only"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 206
+        },
+        "id": "gTpHo9F_xuAE",
+        "outputId": "8061c7f9-9307-4502-d3a0-ed7b698480ad"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "          userName  score                  at  \\\n",
+              "0    Regar Margana      5 2024-04-16 13:48:42   \n",
+              "1  Maehan Hotplate      5 2024-04-16 13:27:49   \n",
+              "2            iqbal      3 2024-04-16 11:34:35   \n",
+              "3         Akmal Ok      1 2024-04-16 08:54:02   \n",
+              "4    Hasyrat Aqdas      1 2024-04-16 03:00:06   \n",
+              "\n",
+              "                                             content  \n",
+              "0  Tidak tau cara masuk ganti nama N password N r...  \n",
+              "1                                                 Ok  \n",
+              "2  ah gk jelas pas mau halving btc malah masa pem...  \n",
+              "3  Aplikasi Ga jelas, transaksi jual Reksadana me...  \n",
+              "4  Woy buat la buat tarik nya pakai dana ribet ka...  "
+            ],
+            "text/html": [
+              "\n",
+              "  <div id=\"df-3a43b1ec-879f-44e4-b5d3-9a2fbaf2c88c\" class=\"colab-df-container\">\n",
+              "    <div>\n",
+              "<style scoped>\n",
+              "    .dataframe tbody tr th:only-of-type {\n",
+              "        vertical-align: middle;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe tbody tr th {\n",
+              "        vertical-align: top;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe thead th {\n",
+              "        text-align: right;\n",
+              "    }\n",
+              "</style>\n",
+              "<table border=\"1\" class=\"dataframe\">\n",
+              "  <thead>\n",
+              "    <tr style=\"text-align: right;\">\n",
+              "      <th></th>\n",
+              "      <th>userName</th>\n",
+              "      <th>score</th>\n",
+              "      <th>at</th>\n",
+              "      <th>content</th>\n",
+              "    </tr>\n",
+              "  </thead>\n",
+              "  <tbody>\n",
+              "    <tr>\n",
+              "      <th>0</th>\n",
+              "      <td>Regar Margana</td>\n",
+              "      <td>5</td>\n",
+              "      <td>2024-04-16 13:48:42</td>\n",
+              "      <td>Tidak tau cara masuk ganti nama N password N r...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>1</th>\n",
+              "      <td>Maehan Hotplate</td>\n",
+              "      <td>5</td>\n",
+              "      <td>2024-04-16 13:27:49</td>\n",
+              "      <td>Ok</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>2</th>\n",
+              "      <td>iqbal</td>\n",
+              "      <td>3</td>\n",
+              "      <td>2024-04-16 11:34:35</td>\n",
+              "      <td>ah gk jelas pas mau halving btc malah masa pem...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>3</th>\n",
+              "      <td>Akmal Ok</td>\n",
+              "      <td>1</td>\n",
+              "      <td>2024-04-16 08:54:02</td>\n",
+              "      <td>Aplikasi Ga jelas, transaksi jual Reksadana me...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>4</th>\n",
+              "      <td>Hasyrat Aqdas</td>\n",
+              "      <td>1</td>\n",
+              "      <td>2024-04-16 03:00:06</td>\n",
+              "      <td>Woy buat la buat tarik nya pakai dana ribet ka...</td>\n",
+              "    </tr>\n",
+              "  </tbody>\n",
+              "</table>\n",
+              "</div>\n",
+              "    <div class=\"colab-df-buttons\">\n",
+              "\n",
+              "  <div class=\"colab-df-container\">\n",
+              "    <button class=\"colab-df-convert\" onclick=\"convertToInteractive('df-3a43b1ec-879f-44e4-b5d3-9a2fbaf2c88c')\"\n",
+              "            title=\"Convert this dataframe to an interactive table.\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "  <svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\" viewBox=\"0 -960 960 960\">\n",
+              "    <path d=\"M120-120v-720h720v720H120Zm60-500h600v-160H180v160Zm220 220h160v-160H400v160Zm0 220h160v-160H400v160ZM180-400h160v-160H180v160Zm440 0h160v-160H620v160ZM180-180h160v-160H180v160Zm440 0h160v-160H620v160Z\"/>\n",
+              "  </svg>\n",
+              "    </button>\n",
+              "\n",
+              "  <style>\n",
+              "    .colab-df-container {\n",
+              "      display:flex;\n",
+              "      gap: 12px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert {\n",
+              "      background-color: #E8F0FE;\n",
+              "      border: none;\n",
+              "      border-radius: 50%;\n",
+              "      cursor: pointer;\n",
+              "      display: none;\n",
+              "      fill: #1967D2;\n",
+              "      height: 32px;\n",
+              "      padding: 0 0 0 0;\n",
+              "      width: 32px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert:hover {\n",
+              "      background-color: #E2EBFA;\n",
+              "      box-shadow: 0px 1px 2px rgba(60, 64, 67, 0.3), 0px 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "      fill: #174EA6;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-buttons div {\n",
+              "      margin-bottom: 4px;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert {\n",
+              "      background-color: #3B4455;\n",
+              "      fill: #D2E3FC;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert:hover {\n",
+              "      background-color: #434B5C;\n",
+              "      box-shadow: 0px 1px 3px 1px rgba(0, 0, 0, 0.15);\n",
+              "      filter: drop-shadow(0px 1px 2px rgba(0, 0, 0, 0.3));\n",
+              "      fill: #FFFFFF;\n",
+              "    }\n",
+              "  </style>\n",
+              "\n",
+              "    <script>\n",
+              "      const buttonEl =\n",
+              "        document.querySelector('#df-3a43b1ec-879f-44e4-b5d3-9a2fbaf2c88c button.colab-df-convert');\n",
+              "      buttonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "\n",
+              "      async function convertToInteractive(key) {\n",
+              "        const element = document.querySelector('#df-3a43b1ec-879f-44e4-b5d3-9a2fbaf2c88c');\n",
+              "        const dataTable =\n",
+              "          await google.colab.kernel.invokeFunction('convertToInteractive',\n",
+              "                                                    [key], {});\n",
+              "        if (!dataTable) return;\n",
+              "\n",
+              "        const docLinkHtml = 'Like what you see? Visit the ' +\n",
+              "          '<a target=\"_blank\" href=https://colab.research.google.com/notebooks/data_table.ipynb>data table notebook</a>'\n",
+              "          + ' to learn more about interactive tables.';\n",
+              "        element.innerHTML = '';\n",
+              "        dataTable['output_type'] = 'display_data';\n",
+              "        await google.colab.output.renderOutput(dataTable, element);\n",
+              "        const docLink = document.createElement('div');\n",
+              "        docLink.innerHTML = docLinkHtml;\n",
+              "        element.appendChild(docLink);\n",
+              "      }\n",
+              "    </script>\n",
+              "  </div>\n",
+              "\n",
+              "\n",
+              "<div id=\"df-56c865f8-1bed-4bbb-b343-0c27e1425801\">\n",
+              "  <button class=\"colab-df-quickchart\" onclick=\"quickchart('df-56c865f8-1bed-4bbb-b343-0c27e1425801')\"\n",
+              "            title=\"Suggest charts\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\"viewBox=\"0 0 24 24\"\n",
+              "     width=\"24px\">\n",
+              "    <g>\n",
+              "        <path d=\"M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z\"/>\n",
+              "    </g>\n",
+              "</svg>\n",
+              "  </button>\n",
+              "\n",
+              "<style>\n",
+              "  .colab-df-quickchart {\n",
+              "      --bg-color: #E8F0FE;\n",
+              "      --fill-color: #1967D2;\n",
+              "      --hover-bg-color: #E2EBFA;\n",
+              "      --hover-fill-color: #174EA6;\n",
+              "      --disabled-fill-color: #AAA;\n",
+              "      --disabled-bg-color: #DDD;\n",
+              "  }\n",
+              "\n",
+              "  [theme=dark] .colab-df-quickchart {\n",
+              "      --bg-color: #3B4455;\n",
+              "      --fill-color: #D2E3FC;\n",
+              "      --hover-bg-color: #434B5C;\n",
+              "      --hover-fill-color: #FFFFFF;\n",
+              "      --disabled-bg-color: #3B4455;\n",
+              "      --disabled-fill-color: #666;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart {\n",
+              "    background-color: var(--bg-color);\n",
+              "    border: none;\n",
+              "    border-radius: 50%;\n",
+              "    cursor: pointer;\n",
+              "    display: none;\n",
+              "    fill: var(--fill-color);\n",
+              "    height: 32px;\n",
+              "    padding: 0;\n",
+              "    width: 32px;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart:hover {\n",
+              "    background-color: var(--hover-bg-color);\n",
+              "    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "    fill: var(--button-hover-fill-color);\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart-complete:disabled,\n",
+              "  .colab-df-quickchart-complete:disabled:hover {\n",
+              "    background-color: var(--disabled-bg-color);\n",
+              "    fill: var(--disabled-fill-color);\n",
+              "    box-shadow: none;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-spinner {\n",
+              "    border: 2px solid var(--fill-color);\n",
+              "    border-color: transparent;\n",
+              "    border-bottom-color: var(--fill-color);\n",
+              "    animation:\n",
+              "      spin 1s steps(1) infinite;\n",
+              "  }\n",
+              "\n",
+              "  @keyframes spin {\n",
+              "    0% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "      border-left-color: var(--fill-color);\n",
+              "    }\n",
+              "    20% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    30% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    40% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    60% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    80% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "    90% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "  }\n",
+              "</style>\n",
+              "\n",
+              "  <script>\n",
+              "    async function quickchart(key) {\n",
+              "      const quickchartButtonEl =\n",
+              "        document.querySelector('#' + key + ' button');\n",
+              "      quickchartButtonEl.disabled = true;  // To prevent multiple clicks.\n",
+              "      quickchartButtonEl.classList.add('colab-df-spinner');\n",
+              "      try {\n",
+              "        const charts = await google.colab.kernel.invokeFunction(\n",
+              "            'suggestCharts', [key], {});\n",
+              "      } catch (error) {\n",
+              "        console.error('Error during call to suggestCharts:', error);\n",
+              "      }\n",
+              "      quickchartButtonEl.classList.remove('colab-df-spinner');\n",
+              "      quickchartButtonEl.classList.add('colab-df-quickchart-complete');\n",
+              "    }\n",
+              "    (() => {\n",
+              "      let quickchartButtonEl =\n",
+              "        document.querySelector('#df-56c865f8-1bed-4bbb-b343-0c27e1425801 button');\n",
+              "      quickchartButtonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "    })();\n",
+              "  </script>\n",
+              "</div>\n",
+              "    </div>\n",
+              "  </div>\n"
+            ],
+            "application/vnd.google.colaboratory.intrinsic+json": {
+              "type": "dataframe",
+              "summary": "{\n  \"name\": \"df_busu[['userName', 'score','at', 'content']]\",\n  \"rows\": 5,\n  \"fields\": [\n    {\n      \"column\": \"userName\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5,\n        \"samples\": [\n          \"Maehan Hotplate\",\n          \"Hasyrat Aqdas\",\n          \"iqbal\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"score\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": 2,\n        \"min\": 1,\n        \"max\": 5,\n        \"num_unique_values\": 3,\n        \"samples\": [\n          5,\n          3,\n          1\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"at\",\n      \"properties\": {\n        \"dtype\": \"date\",\n        \"min\": \"2024-04-16 03:00:06\",\n        \"max\": \"2024-04-16 13:48:42\",\n        \"num_unique_values\": 5,\n        \"samples\": [\n          \"2024-04-16 13:27:49\",\n          \"2024-04-16 03:00:06\",\n          \"2024-04-16 11:34:35\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"content\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5,\n        \"samples\": [\n          \"Ok\",\n          \"Woy buat la buat tarik nya pakai dana ribet kali mau pakai bang nian udah ngk lengkap aset nya ribet lagi buat penarikanya pakai dana woy mau pindah aplikasi sebelah we\",\n          \"ah gk jelas pas mau halving btc malah masa pemeliharaan\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    }\n  ]\n}"
+            }
+          },
+          "metadata": {},
+          "execution_count": 111
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "#Run This Code to Sort the Data By Date\n",
+        "\n",
+        "new_df = df_busu[['userName', 'score','at', 'content']]\n",
+        "sorted_df = new_df.sort_values(by='at', ascending=False) #Sort by Newst, change to True if you want to sort by Oldest.\n",
+        "sorted_df.head()"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 206
+        },
+        "id": "O9xqrnc4xyCy",
+        "outputId": "6958ed14-22f1-4b02-e43e-80ec213eab51"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "          userName  score                  at  \\\n",
+              "0    Regar Margana      5 2024-04-16 13:48:42   \n",
+              "1  Maehan Hotplate      5 2024-04-16 13:27:49   \n",
+              "2            iqbal      3 2024-04-16 11:34:35   \n",
+              "3         Akmal Ok      1 2024-04-16 08:54:02   \n",
+              "4    Hasyrat Aqdas      1 2024-04-16 03:00:06   \n",
+              "\n",
+              "                                             content  \n",
+              "0  Tidak tau cara masuk ganti nama N password N r...  \n",
+              "1                                                 Ok  \n",
+              "2  ah gk jelas pas mau halving btc malah masa pem...  \n",
+              "3  Aplikasi Ga jelas, transaksi jual Reksadana me...  \n",
+              "4  Woy buat la buat tarik nya pakai dana ribet ka...  "
+            ],
+            "text/html": [
+              "\n",
+              "  <div id=\"df-0a9de5ef-84b1-4758-bf76-7c0dfe8ee4c9\" class=\"colab-df-container\">\n",
+              "    <div>\n",
+              "<style scoped>\n",
+              "    .dataframe tbody tr th:only-of-type {\n",
+              "        vertical-align: middle;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe tbody tr th {\n",
+              "        vertical-align: top;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe thead th {\n",
+              "        text-align: right;\n",
+              "    }\n",
+              "</style>\n",
+              "<table border=\"1\" class=\"dataframe\">\n",
+              "  <thead>\n",
+              "    <tr style=\"text-align: right;\">\n",
+              "      <th></th>\n",
+              "      <th>userName</th>\n",
+              "      <th>score</th>\n",
+              "      <th>at</th>\n",
+              "      <th>content</th>\n",
+              "    </tr>\n",
+              "  </thead>\n",
+              "  <tbody>\n",
+              "    <tr>\n",
+              "      <th>0</th>\n",
+              "      <td>Regar Margana</td>\n",
+              "      <td>5</td>\n",
+              "      <td>2024-04-16 13:48:42</td>\n",
+              "      <td>Tidak tau cara masuk ganti nama N password N r...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>1</th>\n",
+              "      <td>Maehan Hotplate</td>\n",
+              "      <td>5</td>\n",
+              "      <td>2024-04-16 13:27:49</td>\n",
+              "      <td>Ok</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>2</th>\n",
+              "      <td>iqbal</td>\n",
+              "      <td>3</td>\n",
+              "      <td>2024-04-16 11:34:35</td>\n",
+              "      <td>ah gk jelas pas mau halving btc malah masa pem...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>3</th>\n",
+              "      <td>Akmal Ok</td>\n",
+              "      <td>1</td>\n",
+              "      <td>2024-04-16 08:54:02</td>\n",
+              "      <td>Aplikasi Ga jelas, transaksi jual Reksadana me...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>4</th>\n",
+              "      <td>Hasyrat Aqdas</td>\n",
+              "      <td>1</td>\n",
+              "      <td>2024-04-16 03:00:06</td>\n",
+              "      <td>Woy buat la buat tarik nya pakai dana ribet ka...</td>\n",
+              "    </tr>\n",
+              "  </tbody>\n",
+              "</table>\n",
+              "</div>\n",
+              "    <div class=\"colab-df-buttons\">\n",
+              "\n",
+              "  <div class=\"colab-df-container\">\n",
+              "    <button class=\"colab-df-convert\" onclick=\"convertToInteractive('df-0a9de5ef-84b1-4758-bf76-7c0dfe8ee4c9')\"\n",
+              "            title=\"Convert this dataframe to an interactive table.\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "  <svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\" viewBox=\"0 -960 960 960\">\n",
+              "    <path d=\"M120-120v-720h720v720H120Zm60-500h600v-160H180v160Zm220 220h160v-160H400v160Zm0 220h160v-160H400v160ZM180-400h160v-160H180v160Zm440 0h160v-160H620v160ZM180-180h160v-160H180v160Zm440 0h160v-160H620v160Z\"/>\n",
+              "  </svg>\n",
+              "    </button>\n",
+              "\n",
+              "  <style>\n",
+              "    .colab-df-container {\n",
+              "      display:flex;\n",
+              "      gap: 12px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert {\n",
+              "      background-color: #E8F0FE;\n",
+              "      border: none;\n",
+              "      border-radius: 50%;\n",
+              "      cursor: pointer;\n",
+              "      display: none;\n",
+              "      fill: #1967D2;\n",
+              "      height: 32px;\n",
+              "      padding: 0 0 0 0;\n",
+              "      width: 32px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert:hover {\n",
+              "      background-color: #E2EBFA;\n",
+              "      box-shadow: 0px 1px 2px rgba(60, 64, 67, 0.3), 0px 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "      fill: #174EA6;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-buttons div {\n",
+              "      margin-bottom: 4px;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert {\n",
+              "      background-color: #3B4455;\n",
+              "      fill: #D2E3FC;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert:hover {\n",
+              "      background-color: #434B5C;\n",
+              "      box-shadow: 0px 1px 3px 1px rgba(0, 0, 0, 0.15);\n",
+              "      filter: drop-shadow(0px 1px 2px rgba(0, 0, 0, 0.3));\n",
+              "      fill: #FFFFFF;\n",
+              "    }\n",
+              "  </style>\n",
+              "\n",
+              "    <script>\n",
+              "      const buttonEl =\n",
+              "        document.querySelector('#df-0a9de5ef-84b1-4758-bf76-7c0dfe8ee4c9 button.colab-df-convert');\n",
+              "      buttonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "\n",
+              "      async function convertToInteractive(key) {\n",
+              "        const element = document.querySelector('#df-0a9de5ef-84b1-4758-bf76-7c0dfe8ee4c9');\n",
+              "        const dataTable =\n",
+              "          await google.colab.kernel.invokeFunction('convertToInteractive',\n",
+              "                                                    [key], {});\n",
+              "        if (!dataTable) return;\n",
+              "\n",
+              "        const docLinkHtml = 'Like what you see? Visit the ' +\n",
+              "          '<a target=\"_blank\" href=https://colab.research.google.com/notebooks/data_table.ipynb>data table notebook</a>'\n",
+              "          + ' to learn more about interactive tables.';\n",
+              "        element.innerHTML = '';\n",
+              "        dataTable['output_type'] = 'display_data';\n",
+              "        await google.colab.output.renderOutput(dataTable, element);\n",
+              "        const docLink = document.createElement('div');\n",
+              "        docLink.innerHTML = docLinkHtml;\n",
+              "        element.appendChild(docLink);\n",
+              "      }\n",
+              "    </script>\n",
+              "  </div>\n",
+              "\n",
+              "\n",
+              "<div id=\"df-d660f10d-7c06-45b5-aa0b-9bc12a6b3552\">\n",
+              "  <button class=\"colab-df-quickchart\" onclick=\"quickchart('df-d660f10d-7c06-45b5-aa0b-9bc12a6b3552')\"\n",
+              "            title=\"Suggest charts\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\"viewBox=\"0 0 24 24\"\n",
+              "     width=\"24px\">\n",
+              "    <g>\n",
+              "        <path d=\"M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z\"/>\n",
+              "    </g>\n",
+              "</svg>\n",
+              "  </button>\n",
+              "\n",
+              "<style>\n",
+              "  .colab-df-quickchart {\n",
+              "      --bg-color: #E8F0FE;\n",
+              "      --fill-color: #1967D2;\n",
+              "      --hover-bg-color: #E2EBFA;\n",
+              "      --hover-fill-color: #174EA6;\n",
+              "      --disabled-fill-color: #AAA;\n",
+              "      --disabled-bg-color: #DDD;\n",
+              "  }\n",
+              "\n",
+              "  [theme=dark] .colab-df-quickchart {\n",
+              "      --bg-color: #3B4455;\n",
+              "      --fill-color: #D2E3FC;\n",
+              "      --hover-bg-color: #434B5C;\n",
+              "      --hover-fill-color: #FFFFFF;\n",
+              "      --disabled-bg-color: #3B4455;\n",
+              "      --disabled-fill-color: #666;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart {\n",
+              "    background-color: var(--bg-color);\n",
+              "    border: none;\n",
+              "    border-radius: 50%;\n",
+              "    cursor: pointer;\n",
+              "    display: none;\n",
+              "    fill: var(--fill-color);\n",
+              "    height: 32px;\n",
+              "    padding: 0;\n",
+              "    width: 32px;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart:hover {\n",
+              "    background-color: var(--hover-bg-color);\n",
+              "    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "    fill: var(--button-hover-fill-color);\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart-complete:disabled,\n",
+              "  .colab-df-quickchart-complete:disabled:hover {\n",
+              "    background-color: var(--disabled-bg-color);\n",
+              "    fill: var(--disabled-fill-color);\n",
+              "    box-shadow: none;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-spinner {\n",
+              "    border: 2px solid var(--fill-color);\n",
+              "    border-color: transparent;\n",
+              "    border-bottom-color: var(--fill-color);\n",
+              "    animation:\n",
+              "      spin 1s steps(1) infinite;\n",
+              "  }\n",
+              "\n",
+              "  @keyframes spin {\n",
+              "    0% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "      border-left-color: var(--fill-color);\n",
+              "    }\n",
+              "    20% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    30% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    40% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    60% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    80% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "    90% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "  }\n",
+              "</style>\n",
+              "\n",
+              "  <script>\n",
+              "    async function quickchart(key) {\n",
+              "      const quickchartButtonEl =\n",
+              "        document.querySelector('#' + key + ' button');\n",
+              "      quickchartButtonEl.disabled = true;  // To prevent multiple clicks.\n",
+              "      quickchartButtonEl.classList.add('colab-df-spinner');\n",
+              "      try {\n",
+              "        const charts = await google.colab.kernel.invokeFunction(\n",
+              "            'suggestCharts', [key], {});\n",
+              "      } catch (error) {\n",
+              "        console.error('Error during call to suggestCharts:', error);\n",
+              "      }\n",
+              "      quickchartButtonEl.classList.remove('colab-df-spinner');\n",
+              "      quickchartButtonEl.classList.add('colab-df-quickchart-complete');\n",
+              "    }\n",
+              "    (() => {\n",
+              "      let quickchartButtonEl =\n",
+              "        document.querySelector('#df-d660f10d-7c06-45b5-aa0b-9bc12a6b3552 button');\n",
+              "      quickchartButtonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "    })();\n",
+              "  </script>\n",
+              "</div>\n",
+              "    </div>\n",
+              "  </div>\n"
+            ],
+            "application/vnd.google.colaboratory.intrinsic+json": {
+              "type": "dataframe",
+              "variable_name": "sorted_df",
+              "summary": "{\n  \"name\": \"sorted_df\",\n  \"rows\": 5174,\n  \"fields\": [\n    {\n      \"column\": \"userName\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5156,\n        \"samples\": [\n          \"millky latte\",\n          \"lukimah lukimah\",\n          \"Ahmadsahrul Munawar\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"score\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": 1,\n        \"min\": 1,\n        \"max\": 5,\n        \"num_unique_values\": 5,\n        \"samples\": [\n          3,\n          2,\n          1\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"at\",\n      \"properties\": {\n        \"dtype\": \"date\",\n        \"min\": \"2022-08-17 00:12:03\",\n        \"max\": \"2024-04-16 13:48:42\",\n        \"num_unique_values\": 5161,\n        \"samples\": [\n          \"2023-11-22 05:32:26\",\n          \"2023-12-02 09:39:43\",\n          \"2023-01-11 04:06:56\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"content\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 4772,\n        \"samples\": [\n          \"Aplikasi jelek, udah set jual. Gak bisa ke jual, udah turunin angka jual. Udah melompat tinggi masih gak ke jual, aplikasi scam\",\n          \"easy to use simple\",\n          \"Wawww aplikasi yang bagus cocok untuk mempermudah investasi\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    }\n  ]\n}"
+            }
+          },
+          "metadata": {},
+          "execution_count": 112
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "my_df = sorted_df[['userName', 'score','at', 'content']] #get userName, rating, date-time, and reviews only"
+      ],
+      "metadata": {
+        "id": "N_gnzAckx1Py"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "my_df.head()"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 206
+        },
+        "id": "i_-EMUoux3Mc",
+        "outputId": "395e565f-e53d-4904-ee84-2ebf89af4886"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "          userName  score                  at  \\\n",
+              "0    Regar Margana      5 2024-04-16 13:48:42   \n",
+              "1  Maehan Hotplate      5 2024-04-16 13:27:49   \n",
+              "2            iqbal      3 2024-04-16 11:34:35   \n",
+              "3         Akmal Ok      1 2024-04-16 08:54:02   \n",
+              "4    Hasyrat Aqdas      1 2024-04-16 03:00:06   \n",
+              "\n",
+              "                                             content  \n",
+              "0  Tidak tau cara masuk ganti nama N password N r...  \n",
+              "1                                                 Ok  \n",
+              "2  ah gk jelas pas mau halving btc malah masa pem...  \n",
+              "3  Aplikasi Ga jelas, transaksi jual Reksadana me...  \n",
+              "4  Woy buat la buat tarik nya pakai dana ribet ka...  "
+            ],
+            "text/html": [
+              "\n",
+              "  <div id=\"df-a8d18125-788b-465c-9598-a63ab7e3066a\" class=\"colab-df-container\">\n",
+              "    <div>\n",
+              "<style scoped>\n",
+              "    .dataframe tbody tr th:only-of-type {\n",
+              "        vertical-align: middle;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe tbody tr th {\n",
+              "        vertical-align: top;\n",
+              "    }\n",
+              "\n",
+              "    .dataframe thead th {\n",
+              "        text-align: right;\n",
+              "    }\n",
+              "</style>\n",
+              "<table border=\"1\" class=\"dataframe\">\n",
+              "  <thead>\n",
+              "    <tr style=\"text-align: right;\">\n",
+              "      <th></th>\n",
+              "      <th>userName</th>\n",
+              "      <th>score</th>\n",
+              "      <th>at</th>\n",
+              "      <th>content</th>\n",
+              "    </tr>\n",
+              "  </thead>\n",
+              "  <tbody>\n",
+              "    <tr>\n",
+              "      <th>0</th>\n",
+              "      <td>Regar Margana</td>\n",
+              "      <td>5</td>\n",
+              "      <td>2024-04-16 13:48:42</td>\n",
+              "      <td>Tidak tau cara masuk ganti nama N password N r...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>1</th>\n",
+              "      <td>Maehan Hotplate</td>\n",
+              "      <td>5</td>\n",
+              "      <td>2024-04-16 13:27:49</td>\n",
+              "      <td>Ok</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>2</th>\n",
+              "      <td>iqbal</td>\n",
+              "      <td>3</td>\n",
+              "      <td>2024-04-16 11:34:35</td>\n",
+              "      <td>ah gk jelas pas mau halving btc malah masa pem...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>3</th>\n",
+              "      <td>Akmal Ok</td>\n",
+              "      <td>1</td>\n",
+              "      <td>2024-04-16 08:54:02</td>\n",
+              "      <td>Aplikasi Ga jelas, transaksi jual Reksadana me...</td>\n",
+              "    </tr>\n",
+              "    <tr>\n",
+              "      <th>4</th>\n",
+              "      <td>Hasyrat Aqdas</td>\n",
+              "      <td>1</td>\n",
+              "      <td>2024-04-16 03:00:06</td>\n",
+              "      <td>Woy buat la buat tarik nya pakai dana ribet ka...</td>\n",
+              "    </tr>\n",
+              "  </tbody>\n",
+              "</table>\n",
+              "</div>\n",
+              "    <div class=\"colab-df-buttons\">\n",
+              "\n",
+              "  <div class=\"colab-df-container\">\n",
+              "    <button class=\"colab-df-convert\" onclick=\"convertToInteractive('df-a8d18125-788b-465c-9598-a63ab7e3066a')\"\n",
+              "            title=\"Convert this dataframe to an interactive table.\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "  <svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\" viewBox=\"0 -960 960 960\">\n",
+              "    <path d=\"M120-120v-720h720v720H120Zm60-500h600v-160H180v160Zm220 220h160v-160H400v160Zm0 220h160v-160H400v160ZM180-400h160v-160H180v160Zm440 0h160v-160H620v160ZM180-180h160v-160H180v160Zm440 0h160v-160H620v160Z\"/>\n",
+              "  </svg>\n",
+              "    </button>\n",
+              "\n",
+              "  <style>\n",
+              "    .colab-df-container {\n",
+              "      display:flex;\n",
+              "      gap: 12px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert {\n",
+              "      background-color: #E8F0FE;\n",
+              "      border: none;\n",
+              "      border-radius: 50%;\n",
+              "      cursor: pointer;\n",
+              "      display: none;\n",
+              "      fill: #1967D2;\n",
+              "      height: 32px;\n",
+              "      padding: 0 0 0 0;\n",
+              "      width: 32px;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-convert:hover {\n",
+              "      background-color: #E2EBFA;\n",
+              "      box-shadow: 0px 1px 2px rgba(60, 64, 67, 0.3), 0px 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "      fill: #174EA6;\n",
+              "    }\n",
+              "\n",
+              "    .colab-df-buttons div {\n",
+              "      margin-bottom: 4px;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert {\n",
+              "      background-color: #3B4455;\n",
+              "      fill: #D2E3FC;\n",
+              "    }\n",
+              "\n",
+              "    [theme=dark] .colab-df-convert:hover {\n",
+              "      background-color: #434B5C;\n",
+              "      box-shadow: 0px 1px 3px 1px rgba(0, 0, 0, 0.15);\n",
+              "      filter: drop-shadow(0px 1px 2px rgba(0, 0, 0, 0.3));\n",
+              "      fill: #FFFFFF;\n",
+              "    }\n",
+              "  </style>\n",
+              "\n",
+              "    <script>\n",
+              "      const buttonEl =\n",
+              "        document.querySelector('#df-a8d18125-788b-465c-9598-a63ab7e3066a button.colab-df-convert');\n",
+              "      buttonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "\n",
+              "      async function convertToInteractive(key) {\n",
+              "        const element = document.querySelector('#df-a8d18125-788b-465c-9598-a63ab7e3066a');\n",
+              "        const dataTable =\n",
+              "          await google.colab.kernel.invokeFunction('convertToInteractive',\n",
+              "                                                    [key], {});\n",
+              "        if (!dataTable) return;\n",
+              "\n",
+              "        const docLinkHtml = 'Like what you see? Visit the ' +\n",
+              "          '<a target=\"_blank\" href=https://colab.research.google.com/notebooks/data_table.ipynb>data table notebook</a>'\n",
+              "          + ' to learn more about interactive tables.';\n",
+              "        element.innerHTML = '';\n",
+              "        dataTable['output_type'] = 'display_data';\n",
+              "        await google.colab.output.renderOutput(dataTable, element);\n",
+              "        const docLink = document.createElement('div');\n",
+              "        docLink.innerHTML = docLinkHtml;\n",
+              "        element.appendChild(docLink);\n",
+              "      }\n",
+              "    </script>\n",
+              "  </div>\n",
+              "\n",
+              "\n",
+              "<div id=\"df-543a9160-ef00-46c7-b384-852b1442c679\">\n",
+              "  <button class=\"colab-df-quickchart\" onclick=\"quickchart('df-543a9160-ef00-46c7-b384-852b1442c679')\"\n",
+              "            title=\"Suggest charts\"\n",
+              "            style=\"display:none;\">\n",
+              "\n",
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" height=\"24px\"viewBox=\"0 0 24 24\"\n",
+              "     width=\"24px\">\n",
+              "    <g>\n",
+              "        <path d=\"M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z\"/>\n",
+              "    </g>\n",
+              "</svg>\n",
+              "  </button>\n",
+              "\n",
+              "<style>\n",
+              "  .colab-df-quickchart {\n",
+              "      --bg-color: #E8F0FE;\n",
+              "      --fill-color: #1967D2;\n",
+              "      --hover-bg-color: #E2EBFA;\n",
+              "      --hover-fill-color: #174EA6;\n",
+              "      --disabled-fill-color: #AAA;\n",
+              "      --disabled-bg-color: #DDD;\n",
+              "  }\n",
+              "\n",
+              "  [theme=dark] .colab-df-quickchart {\n",
+              "      --bg-color: #3B4455;\n",
+              "      --fill-color: #D2E3FC;\n",
+              "      --hover-bg-color: #434B5C;\n",
+              "      --hover-fill-color: #FFFFFF;\n",
+              "      --disabled-bg-color: #3B4455;\n",
+              "      --disabled-fill-color: #666;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart {\n",
+              "    background-color: var(--bg-color);\n",
+              "    border: none;\n",
+              "    border-radius: 50%;\n",
+              "    cursor: pointer;\n",
+              "    display: none;\n",
+              "    fill: var(--fill-color);\n",
+              "    height: 32px;\n",
+              "    padding: 0;\n",
+              "    width: 32px;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart:hover {\n",
+              "    background-color: var(--hover-bg-color);\n",
+              "    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);\n",
+              "    fill: var(--button-hover-fill-color);\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-quickchart-complete:disabled,\n",
+              "  .colab-df-quickchart-complete:disabled:hover {\n",
+              "    background-color: var(--disabled-bg-color);\n",
+              "    fill: var(--disabled-fill-color);\n",
+              "    box-shadow: none;\n",
+              "  }\n",
+              "\n",
+              "  .colab-df-spinner {\n",
+              "    border: 2px solid var(--fill-color);\n",
+              "    border-color: transparent;\n",
+              "    border-bottom-color: var(--fill-color);\n",
+              "    animation:\n",
+              "      spin 1s steps(1) infinite;\n",
+              "  }\n",
+              "\n",
+              "  @keyframes spin {\n",
+              "    0% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "      border-left-color: var(--fill-color);\n",
+              "    }\n",
+              "    20% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    30% {\n",
+              "      border-color: transparent;\n",
+              "      border-left-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    40% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-top-color: var(--fill-color);\n",
+              "    }\n",
+              "    60% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "    }\n",
+              "    80% {\n",
+              "      border-color: transparent;\n",
+              "      border-right-color: var(--fill-color);\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "    90% {\n",
+              "      border-color: transparent;\n",
+              "      border-bottom-color: var(--fill-color);\n",
+              "    }\n",
+              "  }\n",
+              "</style>\n",
+              "\n",
+              "  <script>\n",
+              "    async function quickchart(key) {\n",
+              "      const quickchartButtonEl =\n",
+              "        document.querySelector('#' + key + ' button');\n",
+              "      quickchartButtonEl.disabled = true;  // To prevent multiple clicks.\n",
+              "      quickchartButtonEl.classList.add('colab-df-spinner');\n",
+              "      try {\n",
+              "        const charts = await google.colab.kernel.invokeFunction(\n",
+              "            'suggestCharts', [key], {});\n",
+              "      } catch (error) {\n",
+              "        console.error('Error during call to suggestCharts:', error);\n",
+              "      }\n",
+              "      quickchartButtonEl.classList.remove('colab-df-spinner');\n",
+              "      quickchartButtonEl.classList.add('colab-df-quickchart-complete');\n",
+              "    }\n",
+              "    (() => {\n",
+              "      let quickchartButtonEl =\n",
+              "        document.querySelector('#df-543a9160-ef00-46c7-b384-852b1442c679 button');\n",
+              "      quickchartButtonEl.style.display =\n",
+              "        google.colab.kernel.accessAllowed ? 'block' : 'none';\n",
+              "    })();\n",
+              "  </script>\n",
+              "</div>\n",
+              "    </div>\n",
+              "  </div>\n"
+            ],
+            "application/vnd.google.colaboratory.intrinsic+json": {
+              "type": "dataframe",
+              "variable_name": "my_df",
+              "summary": "{\n  \"name\": \"my_df\",\n  \"rows\": 5174,\n  \"fields\": [\n    {\n      \"column\": \"userName\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 5156,\n        \"samples\": [\n          \"millky latte\",\n          \"lukimah lukimah\",\n          \"Ahmadsahrul Munawar\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"score\",\n      \"properties\": {\n        \"dtype\": \"number\",\n        \"std\": 1,\n        \"min\": 1,\n        \"max\": 5,\n        \"num_unique_values\": 5,\n        \"samples\": [\n          3,\n          2,\n          1\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"at\",\n      \"properties\": {\n        \"dtype\": \"date\",\n        \"min\": \"2022-08-17 00:12:03\",\n        \"max\": \"2024-04-16 13:48:42\",\n        \"num_unique_values\": 5161,\n        \"samples\": [\n          \"2023-11-22 05:32:26\",\n          \"2023-12-02 09:39:43\",\n          \"2023-01-11 04:06:56\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    },\n    {\n      \"column\": \"content\",\n      \"properties\": {\n        \"dtype\": \"string\",\n        \"num_unique_values\": 4772,\n        \"samples\": [\n          \"Aplikasi jelek, udah set jual. Gak bisa ke jual, udah turunin angka jual. Udah melompat tinggi masih gak ke jual, aplikasi scam\",\n          \"easy to use simple\",\n          \"Wawww aplikasi yang bagus cocok untuk mempermudah investasi\"\n        ],\n        \"semantic_type\": \"\",\n        \"description\": \"\"\n      }\n    }\n  ]\n}"
+            }
+          },
+          "metadata": {},
+          "execution_count": 114
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "my_df.to_csv(\"scrapped_data.csv\", index = False)  #Save the file as CSV , to download: click the folder icon on the left. the csv file should be there."
+      ],
+      "metadata": {
+        "id": "F8px9ujbx5bX"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "path_dataset = \"/content/AjaibKripto.csv\""
+      ],
+      "metadata": {
+        "id": "n3aexIVJy8wE"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df1 = pd.read_csv(path_dataset, sep=\";\")"
+      ],
+      "metadata": {
+        "id": "bf2cC8_jzGIl"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df = pd.DataFrame(df1)"
+      ],
+      "metadata": {
+        "id": "WtA-9LOizLxP"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print(df)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "VFYpmIlVzMjV",
+        "outputId": "000cde23-dc88-4293-91df-1294b2c1d0b7"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "      score                                            content  rating\n",
+            "0         5  tidak tau cara masuk ganti nama n password n r...       1\n",
+            "1         5                                                 ok       1\n",
+            "2         3  ah gk jelas pas mau halving btc malah masa pel...       0\n",
+            "3         1  aplikasi ga jelas transaksi jual reksadana leb...      -1\n",
+            "4         1  woy buat la buat tarik nya pakai dana ribet ka...      -1\n",
+            "...     ...                                                ...     ...\n",
+            "4779      1              saran saya mending pakai aplikasi aja      -1\n",
+            "4780      5   moga aplikasi ini dapat manfaat untuk kita semua       1\n",
+            "4781      5  mantap dehh kembang besar karya anak bangsa ma...       1\n",
+            "4782      1  beda apa dari yang ada di aplikasi utama pak s...      -1\n",
+            "4783      5  jauh ini sudah sangat bagus sekali ramah untuk...       1\n",
+            "\n",
+            "[4784 rows x 3 columns]\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df.drop(['userName', 'at', 'Unnamed: 4'], axis = 1, inplace=True)"
+      ],
+      "metadata": {
+        "id": "6124GmqUzqx2"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print(df)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "HQDQkWmxz6hS",
+        "outputId": "84b9fe60-27fb-401d-b851-d5a36cb046b6"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "      score                                            content  rating\n",
+            "0         5  tidak tau cara masuk ganti nama n password n r...       1\n",
+            "1         5                                                 ok       1\n",
+            "2         3  ah gk jelas pas mau halving btc malah masa pel...       0\n",
+            "3         1  aplikasi ga jelas transaksi jual reksadana leb...      -1\n",
+            "4         1  woy buat la buat tarik nya pakai dana ribet ka...      -1\n",
+            "...     ...                                                ...     ...\n",
+            "4779      1              saran saya mending pakai aplikasi aja      -1\n",
+            "4780      5   moga aplikasi ini dapat manfaat untuk kita semua       1\n",
+            "4781      5  mantap dehh kembang besar karya anak bangsa ma...       1\n",
+            "4782      1  beda apa dari yang ada di aplikasi utama pak s...      -1\n",
+            "4783      5  jauh ini sudah sangat bagus sekali ramah untuk...       1\n",
+            "\n",
+            "[4784 rows x 3 columns]\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df.drop_duplicates(inplace=True)"
+      ],
+      "metadata": {
+        "id": "MXSSAtt6z-mA"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "len(df.index)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "14xeFwC30G_i",
+        "outputId": "b523d978-08dc-4214-8136-a051fd55d6c0"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "4808"
+            ]
+          },
+          "metadata": {},
+          "execution_count": 150
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df.isnull().sum()"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "MM5ubElO0MLN",
+        "outputId": "aa4d6b68-8cfa-426c-f9b9-598b1bf967e4"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "score      0\n",
+              "content    0\n",
+              "rating     0\n",
+              "dtype: int64"
+            ]
+          },
+          "metadata": {},
+          "execution_count": 8
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# ------ Case Folding --------\n",
+        "# gunakan fungsi Series.str.lower() pada Pandas\n",
+        "df['content'] = df['content'].str.lower()\n",
+        "\n",
+        "\n",
+        "print('Case Folding Result : \\n')\n",
+        "print(df['content'])\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "RiOlU7r-0PQG",
+        "outputId": "64f98719-0907-488c-874c-40bac26b182b"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Case Folding Result : \n",
+            "\n",
+            "0       tidak tau cara masuk ganti nama n password n r...\n",
+            "1                                                      ok\n",
+            "2       ah gk jelas pas mau halving btc malah masa pem...\n",
+            "3       aplikasi ga jelas, transaksi jual reksadana me...\n",
+            "4       woy buat la buat tarik nya pakai dana ribet ka...\n",
+            "                              ...                        \n",
+            "5169              saran saya mending pakai 1 aplikasi aja\n",
+            "5170    semoga aplikasi ini dapat bermanfaat untuk kit...\n",
+            "5171    mantap dehh berkembang besar karya anak bangsa...\n",
+            "5172    bedanya apa dari yang ada di aplikasi utama pa...\n",
+            "5173    sejauh ini sudah sangat bagus sekali. ramah un...\n",
+            "Name: content, Length: 4808, dtype: object\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from nltk.tokenize import wordpunct_tokenize\n",
+        "\n",
+        "df['content'] = df['content'].apply(lambda x : wordpunct_tokenize(x))"
+      ],
+      "metadata": {
+        "id": "ThWsD6ql0Xsn"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print('Tokenisasi Result : \\n')\n",
+        "print(df['content'])\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "q9-DfIvQ0az4",
+        "outputId": "543e8aa4-9c8e-4fa3-a3aa-f8dc278cf15e"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Tokenisasi Result : \n",
+            "\n",
+            "0       [tidak, tau, cara, masuk, ganti, nama, n, pass...\n",
+            "1                                                    [ok]\n",
+            "2       [ah, gk, jelas, pas, mau, halving, btc, malah,...\n",
+            "3       [aplikasi, ga, jelas, ,, transaksi, jual, reks...\n",
+            "4       [woy, buat, la, buat, tarik, nya, pakai, dana,...\n",
+            "                              ...                        \n",
+            "5169      [saran, saya, mending, pakai, 1, aplikasi, aja]\n",
+            "5170    [semoga, aplikasi, ini, dapat, bermanfaat, unt...\n",
+            "5171    [mantap, dehh, berkembang, besar, karya, anak,...\n",
+            "5172    [bedanya, apa, dari, yang, ada, di, aplikasi, ...\n",
+            "5173    [sejauh, ini, sudah, sangat, bagus, sekali, .,...\n",
+            "Name: content, Length: 4808, dtype: object\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import re\n",
+        "\n",
+        "df['content'] = df['content'].apply(lambda x : re.sub(r\"https?://[^\\s]+\", r\"\", str(x)))"
+      ],
+      "metadata": {
+        "id": "wfdMW3im0efh"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print('URL Removal Result : \\n')\n",
+        "print(df['content'])\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "SLvw7ojm0hn8",
+        "outputId": "dce154d2-7645-4a05-acaf-7114ff5d2d7a"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "URL Removal Result : \n",
+            "\n",
+            "0       ['tidak', 'tau', 'cara', 'masuk', 'ganti', 'na...\n",
+            "1                                                  ['ok']\n",
+            "2       ['ah', 'gk', 'jelas', 'pas', 'mau', 'halving',...\n",
+            "3       ['aplikasi', 'ga', 'jelas', ',', 'transaksi', ...\n",
+            "4       ['woy', 'buat', 'la', 'buat', 'tarik', 'nya', ...\n",
+            "                              ...                        \n",
+            "5169    ['saran', 'saya', 'mending', 'pakai', '1', 'ap...\n",
+            "5170    ['semoga', 'aplikasi', 'ini', 'dapat', 'berman...\n",
+            "5171    ['mantap', 'dehh', 'berkembang', 'besar', 'kar...\n",
+            "5172    ['bedanya', 'apa', 'dari', 'yang', 'ada', 'di'...\n",
+            "5173    ['sejauh', 'ini', 'sudah', 'sangat', 'bagus', ...\n",
+            "Name: content, Length: 4808, dtype: object\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from nltk.corpus import stopwords\n",
+        "from nltk.tokenize import word_tokenize\n",
+        "\n",
+        "# Download NLTK stopwords\n",
+        "import nltk\n",
+        "nltk.download('stopwords')\n",
+        "nltk.download('punkt')\n",
+        "\n",
+        "# Get the list of stopwords\n",
+        "stop_words = set(stopwords.words('indonesian'))\n",
+        "\n",
+        "# Function to remove stop words from text\n",
+        "def remove_stopwords(text):\n",
+        "  tokens = word_tokenize(text.lower())\n",
+        "  filtered_text = [word for word in tokens if word not in stop_words]\n",
+        "  return \" \".join(filtered_text)\n",
+        "\n",
+        "# Apply the function to the 'text' column\n",
+        "df['content'] = df['content'].apply(remove_stopwords)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "h2VGB7R00l-A",
+        "outputId": "9510a7c6-8018-42b9-8e38-e697c23b3a07"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "[nltk_data] Downloading package stopwords to /root/nltk_data...\n",
+            "[nltk_data]   Package stopwords is already up-to-date!\n",
+            "[nltk_data] Downloading package punkt to /root/nltk_data...\n",
+            "[nltk_data]   Package punkt is already up-to-date!\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print('Stopword Removal Result : \\n')\n",
+        "print(df['content'])\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "zUg31cBT057F",
+        "outputId": "7d8b0053-c3b5-4e49-8124-157a6f4dbf65"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Stopword Removal Result : \n",
+            "\n",
+            "0       [ 'tidak ' , 'tau ' , 'cara ' , 'masuk ' , 'ga...\n",
+            "1                                               [ 'ok ' ]\n",
+            "2       [ 'ah ' , 'gk ' , 'jelas ' , 'pas ' , 'mau ' ,...\n",
+            "3       [ 'aplikasi ' , 'ga ' , 'jelas ' , ' , ' , 'tr...\n",
+            "4       [ 'woy ' , 'buat ' , 'la ' , 'buat ' , 'tarik ...\n",
+            "                              ...                        \n",
+            "5169    [ 'saran ' , 'saya ' , 'mending ' , 'pakai ' ,...\n",
+            "5170    [ 'semoga ' , 'aplikasi ' , 'ini ' , 'dapat ' ...\n",
+            "5171    [ 'mantap ' , 'dehh ' , 'berkembang ' , 'besar...\n",
+            "5172    [ 'bedanya ' , 'apa ' , 'dari ' , 'yang ' , 'a...\n",
+            "5173    [ 'sejauh ' , 'ini ' , 'sudah ' , 'sangat ' , ...\n",
+            "Name: content, Length: 4808, dtype: object\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import string\n",
+        "\n",
+        "# define a function to remove punctuation\n",
+        "def remove_punctuation(text):\n",
+        "    return text.translate(str.maketrans('', '', string.punctuation))\n",
+        "# apply the function to the 'text' column\n",
+        "df['content'] = df['content'].apply(remove_punctuation)\n",
+        "# print the updated DataFrame\n",
+        "print(df['content'])"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "8qmEjUFH1HKk",
+        "outputId": "87b32396-ad64-494f-c632-6c7efaf035fe"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "0        tidak   tau   cara   masuk   ganti   nama   n...\n",
+            "1                                                    ok  \n",
+            "2        ah   gk   jelas   pas   mau   halving   btc  ...\n",
+            "3        aplikasi   ga   jelas       transaksi   jual ...\n",
+            "4        woy   buat   la   buat   tarik   nya   pakai ...\n",
+            "                              ...                        \n",
+            "5169     saran   saya   mending   pakai    1   aplikas...\n",
+            "5170     semoga   aplikasi   ini   dapat   bermanfaat ...\n",
+            "5171     mantap   dehh   berkembang   besar   karya   ...\n",
+            "5172     bedanya   apa   dari   yang   ada   di   apli...\n",
+            "5173     sejauh   ini   sudah   sangat   bagus   sekal...\n",
+            "Name: content, Length: 4808, dtype: object\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print('Punctuation Removal Result : \\n')\n",
+        "print(df['content'])\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "CwRhW7Bv2w0s",
+        "outputId": "a07d6546-da97-4796-8db5-15563547823f"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Punctuation Removal Result : \n",
+            "\n",
+            "0        tidak   tau   cara   masuk   ganti   nama   n...\n",
+            "1                                                    ok  \n",
+            "2        ah   gk   jelas   pas   mau   halving   btc  ...\n",
+            "3        aplikasi   ga   jelas       transaksi   jual ...\n",
+            "4        woy   buat   la   buat   tarik   nya   pakai ...\n",
+            "                              ...                        \n",
+            "5169     saran   saya   mending   pakai    1   aplikas...\n",
+            "5170     semoga   aplikasi   ini   dapat   bermanfaat ...\n",
+            "5171     mantap   dehh   berkembang   besar   karya   ...\n",
+            "5172     bedanya   apa   dari   yang   ada   di   apli...\n",
+            "5173     sejauh   ini   sudah   sangat   bagus   sekal...\n",
+            "Name: content, Length: 4808, dtype: object\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import re\n",
+        "\n",
+        "df['content'] = df['content'].str.replace('\\d+', '')\n",
+        "df['content'] = df['content'].str.replace('\\d+$', '')"
+      ],
+      "metadata": {
+        "id": "4kHOFVeR20vv"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import pandas as pd\n",
+        "# Create a translation table\n",
+        "trans = str.maketrans('', '', '0123456789')\n",
+        "# Remove numeric characters\n",
+        "df['content'] = df['content'].str.translate(trans)"
+      ],
+      "metadata": {
+        "id": "uOGiyfxR24WJ"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print('Number Removal Result : \\n')\n",
+        "print(df['content'])\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "mbJIYTr-27Zh",
+        "outputId": "aad3c814-48e2-4ac2-96fb-abfbc2c92991"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Number Removal Result : \n",
+            "\n",
+            "0        tidak   tau   cara   masuk   ganti   nama   n...\n",
+            "1                                                    ok  \n",
+            "2        ah   gk   jelas   pas   mau   halving   btc  ...\n",
+            "3        aplikasi   ga   jelas       transaksi   jual ...\n",
+            "4        woy   buat   la   buat   tarik   nya   pakai ...\n",
+            "                              ...                        \n",
+            "5169     saran   saya   mending   pakai       aplikasi...\n",
+            "5170     semoga   aplikasi   ini   dapat   bermanfaat ...\n",
+            "5171     mantap   dehh   berkembang   besar   karya   ...\n",
+            "5172     bedanya   apa   dari   yang   ada   di   apli...\n",
+            "5173     sejauh   ini   sudah   sangat   bagus   sekal...\n",
+            "Name: content, Length: 4808, dtype: object\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "pip install sastrawi"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "TJefmg4I2_yY",
+        "outputId": "ea02a9d1-2259-4f67-a8ed-4cba3e8256ba"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Requirement already satisfied: sastrawi in /usr/local/lib/python3.10/dist-packages (1.0.1)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "pip install -U pandas"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "LMIvHjbo3Cqf",
+        "outputId": "4dd3bb3f-0d8b-49e5-f687-e322901b8f63"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Requirement already satisfied: pandas in /usr/local/lib/python3.10/dist-packages (2.2.2)\n",
+            "Requirement already satisfied: numpy>=1.22.4 in /usr/local/lib/python3.10/dist-packages (from pandas) (1.25.2)\n",
+            "Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.10/dist-packages (from pandas) (2.8.2)\n",
+            "Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.10/dist-packages (from pandas) (2023.4)\n",
+            "Requirement already satisfied: tzdata>=2022.7 in /usr/local/lib/python3.10/dist-packages (from pandas) (2024.1)\n",
+            "Requirement already satisfied: six>=1.5 in /usr/local/lib/python3.10/dist-packages (from python-dateutil>=2.8.2->pandas) (1.16.0)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "pip install swifter"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "vTccSqe_3Esh",
+        "outputId": "2675069f-fa5d-46ec-b93e-157cf1e98f13"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Collecting swifter\n",
+            "  Downloading swifter-1.4.0.tar.gz (1.2 MB)\n",
+            "\u001b[2K     \u001b[90m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\u001b[0m \u001b[32m1.2/1.2 MB\u001b[0m \u001b[31m6.7 MB/s\u001b[0m eta \u001b[36m0:00:00\u001b[0m\n",
+            "\u001b[?25h  Preparing metadata (setup.py) ... \u001b[?25l\u001b[?25hdone\n",
+            "Requirement already satisfied: pandas>=1.0.0 in /usr/local/lib/python3.10/dist-packages (from swifter) (2.2.2)\n",
+            "Requirement already satisfied: psutil>=5.6.6 in /usr/local/lib/python3.10/dist-packages (from swifter) (5.9.5)\n",
+            "Requirement already satisfied: dask[dataframe]>=2.10.0 in /usr/local/lib/python3.10/dist-packages (from swifter) (2023.8.1)\n",
+            "Requirement already satisfied: tqdm>=4.33.0 in /usr/local/lib/python3.10/dist-packages (from swifter) (4.66.2)\n",
+            "Requirement already satisfied: click>=8.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (8.1.7)\n",
+            "Requirement already satisfied: cloudpickle>=1.5.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (2.2.1)\n",
+            "Requirement already satisfied: fsspec>=2021.09.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (2023.6.0)\n",
+            "Requirement already satisfied: packaging>=20.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (24.0)\n",
+            "Requirement already satisfied: partd>=1.2.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (1.4.1)\n",
+            "Requirement already satisfied: pyyaml>=5.3.1 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (6.0.1)\n",
+            "Requirement already satisfied: toolz>=0.10.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (0.12.1)\n",
+            "Requirement already satisfied: importlib-metadata>=4.13.0 in /usr/local/lib/python3.10/dist-packages (from dask[dataframe]>=2.10.0->swifter) (7.1.0)\n",
+            "Requirement already satisfied: numpy>=1.22.4 in /usr/local/lib/python3.10/dist-packages (from pandas>=1.0.0->swifter) (1.25.2)\n",
+            "Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.10/dist-packages (from pandas>=1.0.0->swifter) (2.8.2)\n",
+            "Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.10/dist-packages (from pandas>=1.0.0->swifter) (2023.4)\n",
+            "Requirement already satisfied: tzdata>=2022.7 in /usr/local/lib/python3.10/dist-packages (from pandas>=1.0.0->swifter) (2024.1)\n",
+            "Requirement already satisfied: zipp>=0.5 in /usr/local/lib/python3.10/dist-packages (from importlib-metadata>=4.13.0->dask[dataframe]>=2.10.0->swifter) (3.18.1)\n",
+            "Requirement already satisfied: locket in /usr/local/lib/python3.10/dist-packages (from partd>=1.2.0->dask[dataframe]>=2.10.0->swifter) (1.0.0)\n",
+            "Requirement already satisfied: six>=1.5 in /usr/local/lib/python3.10/dist-packages (from python-dateutil>=2.8.2->pandas>=1.0.0->swifter) (1.16.0)\n",
+            "Building wheels for collected packages: swifter\n",
+            "  Building wheel for swifter (setup.py) ... \u001b[?25l\u001b[?25hdone\n",
+            "  Created wheel for swifter: filename=swifter-1.4.0-py3-none-any.whl size=16507 sha256=0841da5dd38736dc18e3314354d79358b3ae38a5e662ea1533f40deb187c7c16\n",
+            "  Stored in directory: /root/.cache/pip/wheels/e4/cf/51/0904952972ee2c7aa3709437065278dc534ec1b8d2ad41b443\n",
+            "Successfully built swifter\n",
+            "Installing collected packages: swifter\n",
+            "Successfully installed swifter-1.4.0\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import pandas as pd\n",
+        "from Sastrawi.Stemmer.StemmerFactory import StemmerFactory\n",
+        "\n",
+        "# Fungsi untuk melakukan stemming pada teks Bahasa Indonesia\n",
+        "def stem_text_indonesian(text):\n",
+        "    factory = StemmerFactory()\n",
+        "    stemmer = factory.create_stemmer()\n",
+        "    return stemmer.stem(text)\n",
+        "\n",
+        "# Terapkan fungsi stemming pada kolom teks\n",
+        "df['content'] = df['content'].apply(stem_text_indonesian)\n",
+        "\n",
+        "# Tampilkan dataframe hasil stemming\n",
+        "print(df['content'])"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "CAXd01Jl3Usu",
+        "outputId": "74fffb20-3bfd-4755-ffb7-255071bcec7a"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "0       tidak tau cara masuk ganti nama n password n r...\n",
+            "1                                                      ok\n",
+            "2       ah gk jelas pas mau halving btc malah masa pel...\n",
+            "3       aplikasi ga jelas transaksi jual reksadana leb...\n",
+            "4       woy buat la buat tarik nya pakai dana ribet ka...\n",
+            "                              ...                        \n",
+            "5169                saran saya mending pakai aplikasi aja\n",
+            "5170     moga aplikasi ini dapat manfaat untuk kita semua\n",
+            "5171    mantap dehh kembang besar karya anak bangsa ma...\n",
+            "5172    beda apa dari yang ada di aplikasi utama pak s...\n",
+            "5173    jauh ini sudah sangat bagus sekali ramah untuk...\n",
+            "Name: content, Length: 4808, dtype: object\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print('Stemming Result : \\n')\n",
+        "print(df)\n",
+        "print('\\n\\n\\n')"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "KpKoCXUi3b9c",
+        "outputId": "b07bbc91-61c3-4975-951b-04412e18456c"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Stemming Result : \n",
+            "\n",
+            "     score                                            content\n",
+            "0        5  tidak tau cara masuk ganti nama n password n r...\n",
+            "1        5                                                 ok\n",
+            "2        3  ah gk jelas pas mau halving btc malah masa pel...\n",
+            "3        1  aplikasi ga jelas transaksi jual reksadana leb...\n",
+            "4        1  woy buat la buat tarik nya pakai dana ribet ka...\n",
+            "...    ...                                                ...\n",
+            "5169     1              saran saya mending pakai aplikasi aja\n",
+            "5170     5   moga aplikasi ini dapat manfaat untuk kita semua\n",
+            "5171     5  mantap dehh kembang besar karya anak bangsa ma...\n",
+            "5172     1  beda apa dari yang ada di aplikasi utama pak s...\n",
+            "5173     5  jauh ini sudah sangat bagus sekali ramah untuk...\n",
+            "\n",
+            "[4808 rows x 2 columns]\n",
+            "\n",
+            "\n",
+            "\n",
+            "\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df.to_csv(\"scrapped_data1.csv\", index = False)  #Save the file as CSV , to download: click the folder icon on the left. the csv file should be there."
+      ],
+      "metadata": {
+        "id": "IVGESk9ZDu66"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "path_dataset = \"/content/AjaibKripto.csv\""
+      ],
+      "metadata": {
+        "id": "wbY5pOxpuHti"
+      },
+      "execution_count": 1,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df1 = pd.read_csv(path_dataset, sep=\";\")"
+      ],
+      "metadata": {
+        "id": "3_nqE8_1JUrt"
+      },
+      "execution_count": 4,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "df = pd.DataFrame(df1)"
+      ],
+      "metadata": {
+        "id": "oS6ebti9JXrs"
+      },
+      "execution_count": 5,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print(df)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "rYPQeGc1JYcC",
+        "outputId": "1439ecfc-aa8e-46b8-8ecc-488eb1b4b86e"
+      },
+      "execution_count": 6,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "                                                content  label\n",
+            "0     tidak tau cara masuk ganti nama n password n r...      1\n",
+            "1                                                    ok      1\n",
+            "2     ah gk jelas pas mau halving btc malah masa pel...      0\n",
+            "3     aplikasi ga jelas transaksi jual reksadana leb...     -1\n",
+            "4     woy buat la buat tarik nya pakai dana ribet ka...     -1\n",
+            "...                                                 ...    ...\n",
+            "4663              saran saya mending pakai aplikasi aja     -1\n",
+            "4664   moga aplikasi ini dapat manfaat untuk kita semua      1\n",
+            "4665  mantap dehh kembang besar karya anak bangsa ma...      1\n",
+            "4666  beda apa dari yang ada di aplikasi utama pak s...     -1\n",
+            "4667  jauh ini sudah sangat bagus sekali ramah untuk...      1\n",
+            "\n",
+            "[4668 rows x 2 columns]\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.model_selection import train_test_split\n",
+        "X = df.content\n",
+        "y = df.rating\n",
+        "\n",
+        "x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = 0.1, random_state = 0)\n"
+      ],
+      "metadata": {
+        "id": "PtY7PiBaM31T"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.feature_extraction.text import TfidfVectorizer\n",
+        "\n",
+        "vectorizer = TfidfVectorizer()\n",
+        "vectorizer_train_model = vectorizer.fit_transform(x_train).toarray()"
+      ],
+      "metadata": {
+        "id": "cYaV0k05Ook6"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import time\n",
+        "\n",
+        "from sklearn.naive_bayes import GaussianNB\n",
+        "\n",
+        "text_classifier_nb = GaussianNB()\n",
+        "t0_nb = time.time()\n",
+        "text_classifier_nb.fit(vectorizer_train_model, y_train)\n",
+        "t1_nb = time.time()"
+      ],
+      "metadata": {
+        "id": "3ebHO_clxvLa"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "predictions_nb = text_classifier_nb.predict(vectorizer_train_model)\n",
+        "t2_nb = time.time()\n",
+        "time_linear_train_nb = t1_nb-t0_nb\n",
+        "time_linear_predict_nb = t2_nb-t1_nb\n",
+        "\n",
+        "# results\n",
+        "print(\"NB Training time: %fs; Prediction time: %fs\" % (time_linear_train_nb, time_linear_predict_nb))"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "7oWii3fZzkhR",
+        "outputId": "f36a68fb-508d-4089-9e3b-9971ea561f11"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "NB Training time: 0.890564s; Prediction time: 310.758067s\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.naive_bayes import MultinomialNB\n",
+        "#pembentukan model Naive Bayes\n",
+        "clf=MultinomialNB()\n",
+        "clf.fit(vectorizer_train_model,y_train)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 74
+        },
+        "id": "ezOo88oJ0wVu",
+        "outputId": "848c728f-1493-4b72-db4e-59f991d67373"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "MultinomialNB()"
+            ],
+            "text/html": [
+              "<style>#sk-container-id-1 {color: black;background-color: white;}#sk-container-id-1 pre{padding: 0;}#sk-container-id-1 div.sk-toggleable {background-color: white;}#sk-container-id-1 label.sk-toggleable__label {cursor: pointer;display: block;width: 100%;margin-bottom: 0;padding: 0.3em;box-sizing: border-box;text-align: center;}#sk-container-id-1 label.sk-toggleable__label-arrow:before {content: \"▸\";float: left;margin-right: 0.25em;color: #696969;}#sk-container-id-1 label.sk-toggleable__label-arrow:hover:before {color: black;}#sk-container-id-1 div.sk-estimator:hover label.sk-toggleable__label-arrow:before {color: black;}#sk-container-id-1 div.sk-toggleable__content {max-height: 0;max-width: 0;overflow: hidden;text-align: left;background-color: #f0f8ff;}#sk-container-id-1 div.sk-toggleable__content pre {margin: 0.2em;color: black;border-radius: 0.25em;background-color: #f0f8ff;}#sk-container-id-1 input.sk-toggleable__control:checked~div.sk-toggleable__content {max-height: 200px;max-width: 100%;overflow: auto;}#sk-container-id-1 input.sk-toggleable__control:checked~label.sk-toggleable__label-arrow:before {content: \"▾\";}#sk-container-id-1 div.sk-estimator input.sk-toggleable__control:checked~label.sk-toggleable__label {background-color: #d4ebff;}#sk-container-id-1 div.sk-label input.sk-toggleable__control:checked~label.sk-toggleable__label {background-color: #d4ebff;}#sk-container-id-1 input.sk-hidden--visually {border: 0;clip: rect(1px 1px 1px 1px);clip: rect(1px, 1px, 1px, 1px);height: 1px;margin: -1px;overflow: hidden;padding: 0;position: absolute;width: 1px;}#sk-container-id-1 div.sk-estimator {font-family: monospace;background-color: #f0f8ff;border: 1px dotted black;border-radius: 0.25em;box-sizing: border-box;margin-bottom: 0.5em;}#sk-container-id-1 div.sk-estimator:hover {background-color: #d4ebff;}#sk-container-id-1 div.sk-parallel-item::after {content: \"\";width: 100%;border-bottom: 1px solid gray;flex-grow: 1;}#sk-container-id-1 div.sk-label:hover label.sk-toggleable__label {background-color: #d4ebff;}#sk-container-id-1 div.sk-serial::before {content: \"\";position: absolute;border-left: 1px solid gray;box-sizing: border-box;top: 0;bottom: 0;left: 50%;z-index: 0;}#sk-container-id-1 div.sk-serial {display: flex;flex-direction: column;align-items: center;background-color: white;padding-right: 0.2em;padding-left: 0.2em;position: relative;}#sk-container-id-1 div.sk-item {position: relative;z-index: 1;}#sk-container-id-1 div.sk-parallel {display: flex;align-items: stretch;justify-content: center;background-color: white;position: relative;}#sk-container-id-1 div.sk-item::before, #sk-container-id-1 div.sk-parallel-item::before {content: \"\";position: absolute;border-left: 1px solid gray;box-sizing: border-box;top: 0;bottom: 0;left: 50%;z-index: -1;}#sk-container-id-1 div.sk-parallel-item {display: flex;flex-direction: column;z-index: 1;position: relative;background-color: white;}#sk-container-id-1 div.sk-parallel-item:first-child::after {align-self: flex-end;width: 50%;}#sk-container-id-1 div.sk-parallel-item:last-child::after {align-self: flex-start;width: 50%;}#sk-container-id-1 div.sk-parallel-item:only-child::after {width: 0;}#sk-container-id-1 div.sk-dashed-wrapped {border: 1px dashed gray;margin: 0 0.4em 0.5em 0.4em;box-sizing: border-box;padding-bottom: 0.4em;background-color: white;}#sk-container-id-1 div.sk-label label {font-family: monospace;font-weight: bold;display: inline-block;line-height: 1.2em;}#sk-container-id-1 div.sk-label-container {text-align: center;}#sk-container-id-1 div.sk-container {/* jupyter's `normalize.less` sets `[hidden] { display: none; }` but bootstrap.min.css set `[hidden] { display: none !important; }` so we also need the `!important` here to be able to override the default hidden behavior on the sphinx rendered scikit-learn.org. See: https://github.com/scikit-learn/scikit-learn/issues/21755 */display: inline-block !important;position: relative;}#sk-container-id-1 div.sk-text-repr-fallback {display: none;}</style><div id=\"sk-container-id-1\" class=\"sk-top-container\"><div class=\"sk-text-repr-fallback\"><pre>MultinomialNB()</pre><b>In a Jupyter environment, please rerun this cell to show the HTML representation or trust the notebook. <br />On GitHub, the HTML representation is unable to render, please try loading this page with nbviewer.org.</b></div><div class=\"sk-container\" hidden><div class=\"sk-item\"><div class=\"sk-estimator sk-toggleable\"><input class=\"sk-toggleable__control sk-hidden--visually\" id=\"sk-estimator-id-1\" type=\"checkbox\" checked><label for=\"sk-estimator-id-1\" class=\"sk-toggleable__label sk-toggleable__label-arrow\">MultinomialNB</label><div class=\"sk-toggleable__content\"><pre>MultinomialNB()</pre></div></div></div></div></div>"
+            ]
+          },
+          "metadata": {},
+          "execution_count": 21
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "#term frequency(pebobotan kata) data uji\n",
+        "vec_uji=vectorizer.transform(x_test)\n",
+        "vec_uji"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "bzkPUuwc2cLb",
+        "outputId": "ec06dc73-1010-4f90-8643-56f5e64f3b42"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "<479x3910 sparse matrix of type '<class 'numpy.float64'>'\n",
+              "\twith 5502 stored elements in Compressed Sparse Row format>"
+            ]
+          },
+          "metadata": {},
+          "execution_count": 23
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "#prediksi data uji\n",
+        "predicted=clf.predict(vec_uji)"
+      ],
+      "metadata": {
+        "id": "E0dgN6BQ3EGx"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import pandas as pd\n",
+        "from sklearn.feature_extraction.text import TfidfVectorizer\n",
+        "from sklearn.model_selection import train_test_split\n",
+        "from sklearn.naive_bayes import MultinomialNB\n",
+        "from sklearn.neighbors import KNeighborsClassifier\n",
+        "from sklearn.metrics import accuracy_score"
+      ],
+      "metadata": {
+        "id": "qBCEfDrFJHqu"
+      },
+      "execution_count": 2,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.model_selection import train_test_split\n",
+        "X = df.content\n",
+        "y = df.label\n",
+        "\n",
+        "x_train, x_test, y_train, y_test = train_test_split(X, y, train_size=0.9, test_size=0.1, random_state = 0)"
+      ],
+      "metadata": {
+        "id": "Quf9yY2PJMWu"
+      },
+      "execution_count": 101,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "vectorizer = TfidfVectorizer(max_features=1095)\n",
+        "x_train_tfidf = vectorizer.fit_transform(x_train).toarray()\n",
+        "x_test_tfidf = vectorizer.fit_transform(x_test).toarray()"
+      ],
+      "metadata": {
+        "id": "_auJCEXRJskC"
+      },
+      "execution_count": 102,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Melatih model Naive Bayes\n",
+        "model_nb = MultinomialNB()\n",
+        "model_nb.fit(x_train_tfidf, y_train)\n",
+        "y_pred_nb = model_nb.predict(x_test_tfidf)\n",
+        "accuracy_nb = accuracy_score(y_test, y_pred_nb)\n",
+        "print(\"Akurasi Naive Bayes:\", accuracy_nb)\n",
+        "\n",
+        "# Melatih model KNN\n",
+        "model_knn = KNeighborsClassifier(n_neighbors=3)\n",
+        "model_knn.fit(x_train_tfidf, y_train)\n",
+        "y_pred_knn = model_knn.predict(x_test_tfidf)\n",
+        "accuracy_knn = accuracy_score(y_test, y_pred_knn)\n",
+        "print(\"Akurasi KNN:\", accuracy_knn)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "2s9PwmWqKBCT",
+        "outputId": "ce87e6b8-dd3a-4411-d48b-dc8be4cb6fbc"
+      },
+      "execution_count": 116,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Akurasi Naive Bayes: 0.4796573875802998\n",
+            "Akurasi KNN: 0.7623126338329764\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.metrics import confusion_matrix\n",
+        "import seaborn as sns\n",
+        "import matplotlib.pyplot as plt\n",
+        "\n",
+        "# Menghitung confusion matrix untuk model Naive Bayes\n",
+        "conf_matrix_nb = confusion_matrix(y_test, y_pred_nb)\n",
+        "\n",
+        "# Menampilkan confusion matrix menggunakan heatmap\n",
+        "plt.figure(figsize=(8, 6))\n",
+        "sns.heatmap(conf_matrix_nb, annot=True, fmt='d', cmap='Blues',\n",
+        "            xticklabels=sorted(set(y)), yticklabels=sorted(set(y)))\n",
+        "plt.xlabel('Predicted labels')\n",
+        "plt.ylabel('True labels')\n",
+        "plt.title('Confusion Matrix - Naive Bayes')\n",
+        "plt.show()\n",
+        "\n",
+        "# Menghitung confusion matrix untuk model KNN\n",
+        "conf_matrix_knn = confusion_matrix(y_test, y_pred_knn)\n",
+        "\n",
+        "# Menampilkan confusion matrix menggunakan heatmap\n",
+        "plt.figure(figsize=(8, 6))\n",
+        "sns.heatmap(conf_matrix_knn, annot=True, fmt='d', cmap='Blues',\n",
+        "            xticklabels=sorted(set(y)), yticklabels=sorted(set(y)))\n",
+        "plt.xlabel('Predicted labels')\n",
+        "plt.ylabel('True labels')\n",
+        "plt.title('Confusion Matrix - KNN')\n",
+        "plt.show()"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 1000
+        },
+        "id": "RwpRKdN4LvxM",
+        "outputId": "28c9e92b-f32a-4f7e-ceeb-3923601de811"
+      },
+      "execution_count": 104,
+      "outputs": [
+        {
+          "output_type": "display_data",
+          "data": {
+            "text/plain": [
+              "<Figure size 800x600 with 2 Axes>"
+            ],
+            "image/png": "iVBORw0KGgoAAAANSUhEUgAAAokAAAIjCAYAAABvUIGpAAAAOXRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjcuMSwgaHR0cHM6Ly9tYXRwbG90bGliLm9yZy/bCgiHAAAACXBIWXMAAA9hAAAPYQGoP6dpAABUOElEQVR4nO3deZiN9f/H8deZYc6MWY3BGDFjX8peyU5ki4iyRIYsyZJMSpOsxZQ1JCJbltBCUSlrVFPZJopkTWJkaWgGY8zcvz/8nK/jHsxhjnM4z0fXfV3Ofd/nvt/nNM68vT73/TkWwzAMAQAAAFfwcnUBAAAAcD80iQAAADChSQQAAIAJTSIAAABMaBIBAABgQpMIAAAAE5pEAAAAmNAkAgAAwIQmEQAAACY0icBN2LNnjxo2bKjg4GBZLBYtW7YsW49/8OBBWSwWzZkzJ1uPeyerW7eu6tat6+oystX69etlsVi0fv16V5cCACY0ibhj7du3T88++6yKFi0qX19fBQUFqUaNGpo4caLOnTvn1HNHR0drx44dGjlypObNm6f777/fqee7nTp37iyLxaKgoKBM38c9e/bIYrHIYrFo7NixDh//yJEjGjZsmBISErKh2tsjKipKFotFffv2NW273Oh9/PHHLqjs5lyu+colNDRUDz30kBYsWODq8gC4iRyuLgC4GV988YWefPJJWa1WderUSffdd58uXLig7777Ti+99JJ+++03TZ8+3SnnPnfunOLj4zVo0CD16dPHKeeIjIzUuXPnlDNnTqcc/0Zy5Mihs2fPavny5WrTpo3dtgULFsjX11fnz5+/qWMfOXJEw4cPV1RUlCpWrJjl533zzTc3db7sNGPGDMXGxioiIiJbjle7dm2dO3dOPj4+2XI8Rz3//PN64IEHJEknT57U4sWL1bFjRyUlJal3794uqQmA+yBJxB3nwIEDateunSIjI7Vz505NnDhR3bt3V+/evfXhhx9q586duvfee512/uPHj0uSQkJCnHYOi8UiX19feXt7O+0c12O1WlW/fn19+OGHpm0LFy7Uo48+ettqOXv2rCTJx8fHZc2UJN17771KT0/Xm2++mW3H9PLykq+vr7y8XPNRXKtWLXXs2FEdO3ZUv379tH79ehUsWFALFy50ST0A3AtNIu44o0ePVnJysmbOnKkCBQqYthcvXlz9+vWzPb548aJef/11FStWTFarVVFRUXr11VeVmppq97yoqCg1a9ZM3333nR588EH5+vqqaNGi+uCDD2z7DBs2TJGRkZKkl156SRaLRVFRUZIuDdNe/vOVhg0bJovFYrdu1apVqlmzpkJCQhQQEKBSpUrp1VdftW2/1jWJa9euVa1ateTv76+QkBC1aNFCu3btyvR8e/fuVefOnRUSEqLg4GB16dLF1nBlxVNPPaWvvvpKSUlJtnWbNm3Snj179NRTT5n2P3XqlAYMGKBy5copICBAQUFBatKkiX755RfbPuvXr7clV126dLENdV5+nXXr1tV9992nLVu2qHbt2sqVK5ftfbn6msTo6Gj5+vqaXn+jRo2UO3duHTlyJMuvNSuioqLUqVMnzZgx44bH/vPPP9WrVy+VKlVKfn5+ypMnj5588kkdPHjQbr+rr0ns06ePAgICMv3/1L59e4WHhys9Pd227quvvrL9PAQGBurRRx/Vb7/9dtOv0cfHR7lz51aOHPaDTLNnz9bDDz+sfPnyyWq1qmzZspo6dardPtHR0QoLC1NaWprpuA0bNlSpUqXs1s2fP19VqlSRn5+fQkND1a5dO/311192++zZs0etW7dWeHi4fH19dc8996hdu3Y6ffr0Tb9GAFlHk4g7zvLly1W0aFFVr149S/t369ZNQ4YMUeXKlTVhwgTVqVNHcXFxateunWnfvXv36oknntAjjzyicePGKXfu3OrcubPtF2+rVq00YcIESZd+ac+bN09vv/22Q/X/9ttvatasmVJTUzVixAiNGzdOjz32mL7//vvrPm/16tVq1KiR/vnnHw0bNkwxMTH64YcfVKNGDVPzIUlt2rTRf//9p7i4OLVp00Zz5szR8OHDs1xnq1atZLFY9Omnn9rWLVy4UKVLl1blypVN++/fv1/Lli1Ts2bNNH78eL300kvasWOH6tSpY2uqypQpoxEjRkiSevTooXnz5mnevHmqXbu27TgnT55UkyZNVLFiRb399tuqV69epvVNnDhRefPmVXR0tK1xeu+99/TNN99o8uTJ2TYkfKVBgwbp4sWLN0wTN23apB9++EHt2rXTpEmT1LNnT61Zs0Z169a9bqPetm1bpaSk6IsvvrBbf3no/4knnrCly/PmzdOjjz6qgIAAvfXWWxo8eLB27typmjVrZvrzkJn//vtPJ06c0IkTJ/THH39o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eTIyMrR7924FBgZq37596tq1q7p3727b5+LFiwoODs70nM8995xat26trVu3qmHDhmrZsqWqV6/ucO0A4Ew0icBdrF69epo6dap8fHwUERGhHDns/8r7+/vbPU5OTlaVKlVsw6hXyps3703VcHn42BHJycmSpC+++MKuOZMuXWeZXeLj49WhQwcNHz5cjRo1UnBwsBYtWqRx48Y5XOuMGTNMTau3t3emz2nSpIn+/PNPffnll1q1apXq16+v3r17a+zYsTf/YgAgm9EkAncxf39/FS9ePMv7V65cWYsXL1a+fPlMadplBQoU0E8//aTatWtLupSYbdmyRZUrV850/3LlyikjI0PffvutGjRoYNp+OclMT0+3rStbtqysVqsOHTp0zQSyTJkytptwLvvxxx9v/CKv8MMPPygyMlKDBg2yrfvzzz9N+x06dEhHjhxRRESE7TxeXl4qVaqU8ufPr4iICO3fv18dOnTI8rnz5s2r6OhoRUdHq1atWnrppZdoEgG4Fe5uBmDToUMHhYWFqUWLFtq4caMOHDig9evX6/nnn9fhw4clSf369dObb76pZcuW6ffff1evXr2uO8dhVFSUoqOj9cwzz2jZsmW2Yy5ZskSSFBkZKYvFohUrVuj48eNKTk5WYGCgBgwYoP79+2vu3Lnat2+ftm7dqsmTJ2vu3LmSpJ49e2rPnj166aWXtHv3bi1cuFBz5sxx6PWWKFFChw4d0qJFi7Rv3z5NmjRJS5cuNe3n6+ur6Oho/fLLL9q4caOef/55tWnTRuHh4ZKk4cOHKy4uTpMmTdIff/yhHTt2aPbs2Ro/fnym5x0yZIg+++wz7d27V7/99ptWrFihMmXKOFQ7ADgbTSIAm1y5cmnDhg0qXLiwWrVqpTJlyqhr1646f/68LVl88cUX9fTTTys6OlrVqlVTYGCgHn/88esed+rUqXriiSfUq1cvlS5dWt27d1dKSookqWDBgho+fLheeeUV5c+fX3369JEkvf766xo8eLDi4uJUpkwZNW7cWF988YWKFCki6dJ1gp988omWLVumChUqaNq0aRo1apRDr/exxx5T//791adPH1WsWFE//PCDBg8ebNqvePHiatWqlZo2baqGDRuqfPnydlPcdOvWTe+//75mz56tcuXKqU6dOpozZ46t1qv5+PgoNjZW5cuXV+3ateXt7a1FixY5VDsAOJvFuNbV5gAAAPBYJIkAAAAwoUkEAACACU0iAAAATGgSAQAAYEKTCAAAABOaRAAAAJjQJAIAAMCEJhEAAAAmNIkAAAAwoUkEAACACU0iAAAATP4PyIKTSjZ0kPIAAAAASUVORK5CYII=\n"
+          },
+          "metadata": {}
+        },
+        {
+          "output_type": "display_data",
+          "data": {
+            "text/plain": [
+              "<Figure size 800x600 with 2 Axes>"
+            ],
+            "image/png": "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8omaN2+ud999V927d1dsbKxatmxp+kwcTdgdkZ2drX79+ikqKkoDBw7UpEmTtGHDhiteN3fuXKWkpNiOPn36OHQ/Ly8vvf/++2rbtq3Gjx+vadOmXfGapk2bqlmzZnrxxRedria6auocQOFHkghchREjRsjf318PP/ywMjIyTOf37t2rV199VdLf06WSTE8gv/LKK5JUoPv9Va5cWSdPntS2bdtsbYcPH9bChQvt+p04ccJ07YVNpf+9Lc8FZcqUUb169ZScnGyXdP3000/6+uuvbe/TFZo3b66JEyfq9ddfV3h4+CX7eXt7m6qUH3/8sf744w+7tgvJ7MUSameNHDlSBw8eVHJysl555RVVqFBBcXFxl/wcL7jzzjvVsmVL21GpUiWH71m0aFF98sknuvPOO/Xkk09qzpw5V7zmQtLn6Abv/0wsr3bTcgA3Nn5xBbgKlStX1rx589StWzfVrFnT7hdX1q5dq48//lh9+/aVJNWtW1dxcXF66623lJmZqaZNm2r9+vVKTk5Wp06dLrm9ytXo3r27Ro4cqfvuu0+PP/64Tp8+rRkzZqhatWp2D25MmDBBa9asUbt27RQZGakjR47ojTfeUNmyZXXXXXddcvzJkyerbdu2io6OVv/+/XXmzBm99tprCgwMdHjq82p4eXlp1KhRV+x37733asKECerXr5/uuOMObd++XXPnzjUlYJUrV1ZQUJBmzpypEiVKyN/fX40aNVLFihWdimvlypV64403NHbsWNuWPLNmzVKzZs00evRoTZo0yanxnOHn56cvv/xSTZs21UMPPaTAwEB16NDhkv2bNm2qpk2bavXq1Q7fY+zYsQX6/QRwY6GSCFylDh06aNu2bbr//vv1+eefKz4+Xk8//bQOHDigl19+2W4a8J133tH48eO1YcMGPfnkk1q5cqUSExM1f/78Ao0pJCRECxculJ+fn0aMGKHk5GQlJSWpffv2ptjLly+v9957T/Hx8Zo+fbpiYmK0cuVKBQYGXnL8li1batmyZQoJCdGYMWP00ksvqXHjxvrhhx+cTrBc4ZlnntFTTz2l5cuX64knntDmzZv15Zdfqly5cnb9ihYtquTkZHl7e2vQoEHq0aOHU8mT9PeDSw899JBuu+02/fe//7W1N2nSRE888YRefvll/fjjjwXyvi4lMDBQy5cvV4UKFdStWzetWrXq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AAAKjUKRJAIAALgTD66YsS0QAAAATKgkAgAAj8eaRLOrqiR+99136t27t6Kjo/XHH39IkubMmaPvv/++QIMDAACAezidJH766adq3bq1ihUrpi1btth+J/nkyZN6/vnnCzxAAAAAV7NYXHfcqJxOEp999lnNnDlTb7/9tt1WNXfeeac2b95coMEBAABcD14Wi8uOG5XTSeLu3bsVExNjag8MDFRmZmZBxAQAAAA3czpJDA8P1549e0zt33//vSpVqlQgQQEAAFxPXi48blROxz5gwAA98cQTWrdunSwWiw4dOqS5c+dq2LBhGjx4sCtiBAAAwHXm9BY4Tz/9tPLz89WiRQudPn1aMTExslqtGjZsmB577DFXxAgAAOBSN/DSQZexGIZhXM2F586d0549e3Tq1ClFRUWpePHiBR3bVTt73t0RAEDhl3Um190hAHZCSxS9cicX+e/S/7ls7OfaVnPZ2K501Ztp+/j4KCoqqiBjAQAAcIsb+SlkV3E6SWzevPllf99w5cqV1xQQAAAA3M/pJLFevXp2r3Nzc5WWlqaffvpJcXFxBRUXAADAdUMh0czpJHHKlCkXbR83bpxOnTp1zQEBAABcb/x2s1mBbd/Tu3dvvffeewU1HAAAANzoqh9c+bfU1FT5+voW1HAAAADXDQ+umDmdJHbu3NnutWEYOnz4sDZu3KjRo0cXWGAAAABwH6eTxMDAQLvXXl5eql69uiZMmKDY2NgCCwwAAOB6oZBo5lSSmJeXp379+ql27doqWbKkq2ICAACAmzn14Iq3t7diY2OVmZnponAAAACuPy+L644bldNPN9eqVUv79u1zRSwAAAAoJJxOEp999lkNGzZMS5Ys0eHDh5WVlWV3AAAA3GgsLvznRuXwmsQJEyboqaee0j333CNJ6tChg93P8xmGIYvFory8vIKPEgAAwIVu5GlhV3E4SRw/frwGDRqkb7/91pXxAAAAoBBweLrZMAxJUtOmTS97AAAA3GgK04Mra9asUfv27RURESGLxaJFixbZne/bt68sFovd0aZNG7s+J06cUK9evRQQEKCgoCD179/f6Z9PdmpNooVNhAAAAFwqOztbdevW1fTp0y/Zp02bNjp8+LDt+PDDD+3O9+rVSzt27FBKSoqWLFmiNWvWaODAgU7F4dQ+idWqVbtionjixAmnAgAAAHC3wlQIa9u2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MR0/ftz2esWKFQoICFBKSookKTc3V61bt1Z0dLS+++47FSlSRM8++6zatGmjbdu2ycfHRy+//LJmz56t9957TzVr1tTLL7+shQsX6u67777kffv06aPU1FRNmzZNdevW1f79+3Xs2DGVK1dOn376qbp06aLdu3crICBAxYoVkyQlJSXpgw8+0MyZM1W1alWtWbNGvXv3VunSpdW0aVP99ttv6ty5s+Lj4zVw4EBt3LhRTz31lNOfSYkSJTR79mxFRERo+/btGjBggEqUKKERI0bY+uzZs0cfffSRFi9erKysLPXv31+PPvqo5s6dK0maO3euxowZo9dff1233XabtmzZogEDBsjf319xcXGme44ePVo7d+7U0qVLVapUKe3Zs0dnzpxxOnYAcCkDwE0pLi7O6Nixo2EYhpGfn2+kpKQYVqvVGDZsmO18WFiYkZOTY7tmzpw5RvXq1Y38/HxbW05OjlGsWDFj+fLlhmEYRpkyZYxJkybZzufm5hply5a13cswDKNp06bGE088YRiGYezevduQZKSkpFw0zm+//daQZPz555+2trNnzxp+fn7G2rVr7fr279/f6NGjh2EYhpGYmGhERUXZnR85cqRprH+TZCxcuPCS5ydPnmzUr1/f9nrs2LGGt7e38fvvv9vali5danh5eRmHDx82DMMwKleubMybN89unIkTJxrR0dGGYRjG/v37DUnGli1bDMMwjPbt2xv9+vW7ZAwAUBhQSQRuYkuWLFHx4sWVm5ur/Px89ezZU+PGjbOdr127tt06xK1bt2rPnj0qUaKE3Thnz57V3r17dfLkSR0+fFiNGjWynStSpIgaNGhgmnK+IC0tTd7e3mratKnDce/Zs0enT59Wq1at7NrPnTun2267TZK0a9cuuzgkKTo62uF7XLBgwQJNmzZNe/fu1alTp3T+/HkFBATY9SlfvrxuueUWu/vk5+dr9+7dKlGihPbu3av+/ftrwIABtj7nz59XYGDgRe85ePBgdenSRZs3b1ZsbKw6deqkO+64w+nYAcCVSBKBm1jz5s01Y8YM+fj4KCIiQkWK2P9f3t/f3+71qVOnVL9+fds06j+VLl36qmK4MH3sjFOnTkmSvvzyS7vkTPp7nWVBSU1NVa9evTR+/Hi1bt1agYGBmj9/vl5++WWnY3377bdNSau3t/dFr2nbtq1+/fVXffXVV0pJSVGLFi0UHx+vl1566erfDAAUMJJE4Cbm7++vKlWqONz/9ttv14IFCxQaGmqqpl1QpkwZrVu3TjExMZL+rpht2rRJt99++0X7165dW/n5+Vq9erVatmxpOn+hkpmXl2dri4qKktVq1cGDBy9ZgaxZs6btIZwLfvzxxyu/yX9Yu3atIiMj9d///tfW9uuvv5r6HTx4UIcOHVJERITtPl5eXqpevbrCwsIUERGhffv2qVevXg7fu3Tp0oqLi1NcXJyaNGmi4cOHkyQCKFR4uhmATa9evVSqVCl17NhR3333nfbv369Vq1bp8ccf1++//y5JeuKJJ/TCCy9o0aJF+vnnn/Xoo49edo/DChUqKC4uTg899JAWLVpkG/Ojjz6SJEVGRspisWjJkiU6evSoTp06pRIlSmjYsGEaOnSokpOTtXfvXm3evFmvvfaakpOTJUmDBg3SL7/8ouHDh2v37t2aN2+eZs+e7dT7rVq1qg4ePKj58+dr7969mjZtmhYuXGjq5+vrq7i4OG3dulXfffedHn/8cXXt2lXh4eGSpPHjxyspKUnTpk3T//73P23fvl2zZs3SK6+8ctH7jhkzRp9//rn27NmjHTt2aMmSJapZs6ZTsQOAq5EkArDx8/PTmjVrVL58eXXu3Fk1a9ZU//79dfbsWVtl8amnntKDDz6ouLg4RUdHq0SJErrvvvsuO+6MGTN0//3369FHH1WNGjU0YMAAZWdnS5JuueUWjR8/Xk8//bTCwsI0ZMgQSdLEiRM1evRoJSUlqWbNmmrTpo2+/PJLVaxYUdLf6wQ//fRTLVq0SHXr1tXMmTP1/PPPO/V+O3TooKFDh2rIkCGqV6+e1q5dq9GjR5v6ValSRZ07d9Y999yj2NhY1alTx26Lm4cffljvvPOOZs2apdq1a6tp06aaPXu2LdZ/8/HxUWJiourUqaOYmBh5e3tr/vz5TsUOAK5mMS612hwAAAAei0oiAAAATEgSAQAAYEKSCAAAABOSRAAAAJiQJAIAAMCEJBEAAAAmJIkAAAAwIUkEAACACUkiAAAATEgSAQAAYEKSCAAAAJP/B+eSV/cI3d4wAAAAAElFTkSuQmCC\n"
+          },
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print(x_train)"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "kcwulTyJODKN",
+        "outputId": "9c118bcb-3003-49c1-aff4-372cb9d9cb15"
+      },
+      "execution_count": 105,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "3287    aplikasi mudah guna sangat manfaat untuk yg ba...\n",
+            "195     ajaib ini gmn sih kok ga bisa lihat portofolio...\n",
+            "4194              mantapp fitur fitur aplikasi mudah guna\n",
+            "142     woi developer cepet adain untuk fitur di lapto...\n",
+            "3801    mudah di erti tapi tolong tari saldo bisa pake...\n",
+            "                              ...                        \n",
+            "1033    tari lambat tolong cepat dong tinggal zaman ba...\n",
+            "3264    aplikasi ini sangat bantu para mula dan best b...\n",
+            "1653    masuk kode dari saya supaya dapat hadiah ini k...\n",
+            "2607    ini rekomen banget buat yang mau mulai ajar te...\n",
+            "2732    aplikasi jual beli kripto yang aman percaya ga...\n",
+            "Name: content, Length: 4201, dtype: object\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.metrics import classification_report\n",
+        "\n",
+        "# Menampilkan hasil evaluasi untuk model Naive Bayes\n",
+        "print(\"Hasil evaluasi model Naive Bayes:\")\n",
+        "print(classification_report(y_test, y_pred_nb))\n",
+        "\n",
+        "# Menampilkan hasil evaluasi untuk model KNN\n",
+        "print(\"Hasil evaluasi model KNN:\")\n",
+        "print(classification_report(y_test, y_pred_knn))"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "osMNLn38Pka5",
+        "outputId": "1063a75b-b0d0-433d-a42b-12651c4d322b"
+      },
+      "execution_count": 106,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Hasil evaluasi model Naive Bayes:\n",
+            "              precision    recall  f1-score   support\n",
+            "\n",
+            "          -1       0.20      0.47      0.28        83\n",
+            "           0       0.02      0.04      0.03        26\n",
+            "           1       0.82      0.51      0.63       358\n",
+            "\n",
+            "    accuracy                           0.48       467\n",
+            "   macro avg       0.35      0.34      0.31       467\n",
+            "weighted avg       0.66      0.48      0.54       467\n",
+            "\n",
+            "Hasil evaluasi model KNN:\n",
+            "              precision    recall  f1-score   support\n",
+            "\n",
+            "          -1       0.00      0.00      0.00        83\n",
+            "           0       0.00      0.00      0.00        26\n",
+            "           1       0.77      0.99      0.87       358\n",
+            "\n",
+            "    accuracy                           0.76       467\n",
+            "   macro avg       0.26      0.33      0.29       467\n",
+            "weighted avg       0.59      0.76      0.66       467\n",
+            "\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "/usr/local/lib/python3.10/dist-packages/sklearn/metrics/_classification.py:1344: UndefinedMetricWarning: Precision and F-score are ill-defined and being set to 0.0 in labels with no predicted samples. Use `zero_division` parameter to control this behavior.\n",
+            "  _warn_prf(average, modifier, msg_start, len(result))\n",
+            "/usr/local/lib/python3.10/dist-packages/sklearn/metrics/_classification.py:1344: UndefinedMetricWarning: Precision and F-score are ill-defined and being set to 0.0 in labels with no predicted samples. Use `zero_division` parameter to control this behavior.\n",
+            "  _warn_prf(average, modifier, msg_start, len(result))\n",
+            "/usr/local/lib/python3.10/dist-packages/sklearn/metrics/_classification.py:1344: UndefinedMetricWarning: Precision and F-score are ill-defined and being set to 0.0 in labels with no predicted samples. Use `zero_division` parameter to control this behavior.\n",
+            "  _warn_prf(average, modifier, msg_start, len(result))\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.model_selection import train_test_split\n",
+        "\n",
+        "# Daftar proporsi pembagian data\n",
+        "splits = [(10, 90), (20, 80), (30, 70), (40, 60), (50, 50),\n",
+        "          (60, 40), (70, 30), (80, 20), (90, 10)]\n",
+        "\n",
+        "for train_size, test_size in splits:\n",
+        "    print(f\"Data Latih : Data Uji = {train_size} : {test_size}\")\n",
+        "    X_train, X_test, y_train, y_test = train_test_split(X, y,\n",
+        "                                                        train_size=train_size/100,\n",
+        "                                                        test_size=test_size/100,\n",
+        "                                                        random_state=0)\n",
+        "    print(f\"Jumlah data latih: {len(X_train)}\")\n",
+        "    print(f\"Jumlah data uji: {len(X_test)}\")\n",
+        "    print()"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "v_pxqVnyUIGd",
+        "outputId": "5e0dc59d-f066-4706-d961-771149c96ec6"
+      },
+      "execution_count": 38,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Data Latih : Data Uji = 10 : 90\n",
+            "Jumlah data latih: 466\n",
+            "Jumlah data uji: 4202\n",
+            "\n",
+            "Data Latih : Data Uji = 20 : 80\n",
+            "Jumlah data latih: 933\n",
+            "Jumlah data uji: 3735\n",
+            "\n",
+            "Data Latih : Data Uji = 30 : 70\n",
+            "Jumlah data latih: 1400\n",
+            "Jumlah data uji: 3268\n",
+            "\n",
+            "Data Latih : Data Uji = 40 : 60\n",
+            "Jumlah data latih: 1867\n",
+            "Jumlah data uji: 2801\n",
+            "\n",
+            "Data Latih : Data Uji = 50 : 50\n",
+            "Jumlah data latih: 2334\n",
+            "Jumlah data uji: 2334\n",
+            "\n",
+            "Data Latih : Data Uji = 60 : 40\n",
+            "Jumlah data latih: 2800\n",
+            "Jumlah data uji: 1868\n",
+            "\n",
+            "Data Latih : Data Uji = 70 : 30\n",
+            "Jumlah data latih: 3267\n",
+            "Jumlah data uji: 1401\n",
+            "\n",
+            "Data Latih : Data Uji = 80 : 20\n",
+            "Jumlah data latih: 3734\n",
+            "Jumlah data uji: 934\n",
+            "\n",
+            "Data Latih : Data Uji = 90 : 10\n",
+            "Jumlah data latih: 4201\n",
+            "Jumlah data uji: 467\n",
+            "\n"
+          ]
+        }
+      ]
+    }
+  ]
+}
